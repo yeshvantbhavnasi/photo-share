@@ -1,6 +1,73 @@
 # Family Photo Sharing Platform
 
-Share photos with family by uploading Mac folders as albums with unique share links.
+A serverless photo sharing platform built on AWS. Upload photos from your Mac, organize them into albums, and share with family via unique links.
+
+## Live Demo
+
+**Website**: https://d1nf5k4wr11svj.cloudfront.net
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                    AWS Cloud                                     │
+│                                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────────┐  │
+│  │                              CloudFront CDN                               │  │
+│  │                     https://d1nf5k4wr11svj.cloudfront.net                │  │
+│  └───────────────────────────────┬──────────────────────────────────────────┘  │
+│                                  │                                              │
+│              ┌───────────────────┼───────────────────┐                         │
+│              │                   │                   │                         │
+│              ▼                   ▼                   ▼                         │
+│  ┌───────────────────┐  ┌───────────────┐  ┌───────────────────────┐          │
+│  │  S3 Website       │  │  S3 Photos    │  │   API Gateway         │          │
+│  │  Bucket           │  │  Bucket       │  │   (HTTP API)          │          │
+│  │                   │  │               │  │                       │          │
+│  │  - Next.js static │  │  - /photos/   │  │   GET /albums         │          │
+│  │  - HTML/JS/CSS    │  │  - /thumbnails│  │   GET /album?id=      │          │
+│  └───────────────────┘  └───────────────┘  │   GET /share?token=   │          │
+│                                            └───────────┬───────────┘          │
+│                                                        │                       │
+│                                                        ▼                       │
+│                                            ┌───────────────────────┐          │
+│                                            │   Lambda Function     │          │
+│                                            │   (Python 3.11)       │          │
+│                                            └───────────┬───────────┘          │
+│                                                        │                       │
+│                                                        ▼                       │
+│                                            ┌───────────────────────┐          │
+│                                            │      DynamoDB         │          │
+│                                            │                       │          │
+│                                            │  - PhotosMetadata     │          │
+│                                            │  - ShareLinks         │          │
+│                                            └───────────────────────┘          │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                         ▲
+                                         │ boto3 SDK
+                                         │
+                               ┌─────────────────────┐
+                               │   Mac Upload Script │
+                               │   (Python + Pillow) │
+                               │                     │
+                               │   - Upload photos   │
+                               │   - Gen thumbnails  │
+                               │   - Create metadata │
+                               └─────────────────────┘
+```
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | Next.js 14, React, Tailwind CSS, TypeScript |
+| CDN | AWS CloudFront |
+| Storage | AWS S3 (photos + static website) |
+| Database | AWS DynamoDB |
+| API | AWS Lambda + API Gateway (Python) |
+| Upload | Python script with boto3 + Pillow |
+| CI/CD | GitHub Actions |
 
 ## Features
 

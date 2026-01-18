@@ -4,18 +4,13 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Gallery from '@/components/Gallery';
 import { PhotoItem, AlbumItem } from '@/lib/types';
-
-interface ShareLinkData {
-  albumId: string;
-  albumName: string;
-  expiresAt?: string;
-}
+import { apiClient } from '@/lib/api-client';
 
 export default function SharedAlbumContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get('token') || '';
 
-  const [shareData, setShareData] = useState<ShareLinkData | null>(null);
+  const [album, setAlbum] = useState<AlbumItem | null>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,46 +22,24 @@ export default function SharedAlbumContent() {
       return;
     }
 
-    const storedShareLinks = localStorage.getItem('photo-share-links');
-
-    if (storedShareLinks) {
+    const loadSharedAlbum = async () => {
       try {
-        const links = JSON.parse(storedShareLinks);
-        const link = links[token];
-
-        if (link) {
-          if (link.expiresAt && new Date(link.expiresAt) < new Date()) {
-            setError('This share link has expired.');
-            setIsLoading(false);
-            return;
-          }
-
-          const storedAlbums = localStorage.getItem('photo-share-albums');
-          if (storedAlbums) {
-            const albums: AlbumItem[] = JSON.parse(storedAlbums);
-            const album = albums.find((a) => a.id === link.albumId);
-
-            if (album) {
-              setShareData({ albumId: album.id, albumName: album.name, expiresAt: link.expiresAt });
-              const storedPhotos = localStorage.getItem(`photo-share-photos-${album.id}`);
-              if (storedPhotos) {
-                setPhotos(JSON.parse(storedPhotos));
-              }
-            } else {
-              setError('Album not found.');
-            }
-          }
+        const result = await apiClient.share.validate(token);
+        if (result) {
+          setAlbum(result.album);
+          setPhotos(result.photos);
         } else {
-          setError('Invalid share link.');
+          setError('Invalid or expired share link.');
         }
-      } catch {
+      } catch (err) {
+        console.error('Error loading shared album:', err);
         setError('Failed to load shared album.');
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setShareData({ albumId: 'demo', albumName: 'Demo Shared Album' });
-    }
+    };
 
-    setIsLoading(false);
+    loadSharedAlbum();
   }, [token]);
 
   if (isLoading) {
@@ -95,7 +68,7 @@ export default function SharedAlbumContent() {
     );
   }
 
-  if (!shareData) return null;
+  if (!album) return null;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -107,7 +80,7 @@ export default function SharedAlbumContent() {
           Shared Album
         </div>
 
-        <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-2">{shareData.albumName}</h1>
+        <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-2">{album.name}</h1>
         <p className="text-slate-600 dark:text-slate-300">{photos.length} photo{photos.length !== 1 ? 's' : ''} in this album</p>
       </div>
 

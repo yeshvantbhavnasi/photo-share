@@ -15,9 +15,9 @@ export default function AlbumCard({ album }: AlbumCardProps) {
       className="group block bg-white dark:bg-slate-800 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all"
     >
       <div className="relative aspect-[4/3] bg-slate-100 dark:bg-slate-700">
-        {album.coverSrc ? (
+        {album.coverPhoto ? (
           <Image
-            src={album.coverSrc}
+            src={album.coverPhoto}
             alt={album.name}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"

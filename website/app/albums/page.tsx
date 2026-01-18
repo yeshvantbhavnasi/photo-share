@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import AlbumCard from '@/components/AlbumCard';
 import { AlbumItem } from '@/lib/types';
+import { apiClient } from '@/lib/api-client';
 
 export default function AlbumsPage() {
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
@@ -12,35 +13,23 @@ export default function AlbumsPage() {
   const [newAlbumDescription, setNewAlbumDescription] = useState('');
 
   useEffect(() => {
-    // Load albums from localStorage for demo
-    const storedAlbums = localStorage.getItem('photo-share-albums');
-    if (storedAlbums) {
+    // Load albums from API
+    const loadAlbums = async () => {
       try {
-        setAlbums(JSON.parse(storedAlbums));
-      } catch {
-        // Ignore parsing errors
+        const data = await apiClient.albums.list();
+        setAlbums(data);
+      } catch (error) {
+        console.error('Failed to load albums:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+    loadAlbums();
   }, []);
 
   const createAlbum = () => {
-    if (!newAlbumName.trim()) return;
-
-    const newAlbum: AlbumItem = {
-      id: `album-${Date.now()}`,
-      name: newAlbumName.trim(),
-      description: newAlbumDescription.trim() || undefined,
-      photoCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    const updatedAlbums = [...albums, newAlbum];
-    setAlbums(updatedAlbums);
-    localStorage.setItem('photo-share-albums', JSON.stringify(updatedAlbums));
-
-    setNewAlbumName('');
-    setNewAlbumDescription('');
+    // Albums are created via the upload script
+    alert('Albums are created using the upload script. Run: python scripts/upload.py /path/to/photos --album-name "Album Name"');
     setShowCreateModal(false);
   };
 

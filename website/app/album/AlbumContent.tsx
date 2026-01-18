@@ -5,8 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Gallery from '@/components/Gallery';
 import ShareButton from '@/components/ShareButton';
-import UploadDropzone from '@/components/UploadDropzone';
 import { PhotoItem, AlbumItem } from '@/lib/types';
+import { apiClient } from '@/lib/api-client';
 
 export default function AlbumContent() {
   const searchParams = useSearchParams();
@@ -15,7 +15,6 @@ export default function AlbumContent() {
   const [album, setAlbum] = useState<AlbumItem | null>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [showUpload, setShowUpload] = useState(false);
 
   useEffect(() => {
     if (!albumId) {
@@ -23,55 +22,27 @@ export default function AlbumContent() {
       return;
     }
 
-    const storedAlbums = localStorage.getItem('photo-share-albums');
-    if (storedAlbums) {
+    const loadAlbumData = async () => {
       try {
-        const albums: AlbumItem[] = JSON.parse(storedAlbums);
-        const foundAlbum = albums.find((a) => a.id === albumId);
-        if (foundAlbum) {
-          setAlbum(foundAlbum);
+        // Fetch album and photos from API
+        const [albumData, photosData] = await Promise.all([
+          apiClient.albums.get(albumId),
+          apiClient.photos.list(albumId),
+        ]);
+
+        if (albumData) {
+          setAlbum(albumData);
         }
-      } catch {
-        // Ignore
+        setPhotos(photosData);
+      } catch (error) {
+        console.error('Failed to load album:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-
-    const storedPhotos = localStorage.getItem(`photo-share-photos-${albumId}`);
-    if (storedPhotos) {
-      try {
-        setPhotos(JSON.parse(storedPhotos));
-      } catch {
-        // Ignore
-      }
-    }
-
-    setIsLoading(false);
-  }, [albumId]);
-
-  const handleUploadComplete = (photoId: string) => {
-    const newPhoto: PhotoItem = {
-      id: photoId,
-      src: '/placeholder.jpg',
-      thumbnailSrc: '/placeholder-thumb.jpg',
-      alt: `Photo ${photoId}`,
     };
 
-    const updatedPhotos = [...photos, newPhoto];
-    setPhotos(updatedPhotos);
-    localStorage.setItem(`photo-share-photos-${albumId}`, JSON.stringify(updatedPhotos));
-
-    if (album) {
-      const updatedAlbum = { ...album, photoCount: updatedPhotos.length };
-      setAlbum(updatedAlbum);
-
-      const storedAlbums = localStorage.getItem('photo-share-albums');
-      if (storedAlbums) {
-        const albums: AlbumItem[] = JSON.parse(storedAlbums);
-        const updatedAlbums = albums.map((a) => (a.id === albumId ? updatedAlbum : a));
-        localStorage.setItem('photo-share-albums', JSON.stringify(updatedAlbums));
-      }
-    }
-  };
+    loadAlbumData();
+  }, [albumId]);
 
   if (!albumId) {
     return (
@@ -126,31 +97,15 @@ export default function AlbumContent() {
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{album.name}</h1>
           {album.description && <p className="text-slate-600 dark:text-slate-300 mt-1">{album.description}</p>}
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">
-            {photos.length} photo{photos.length !== 1 ? 's' : ''} · Created {new Date(album.createdAt).toLocaleDateString()}
+            {photos.length} photo{photos.length !== 1 ? 's' : ''}
+            {album.createdAt && ` · Created ${new Date(album.createdAt).toLocaleDateString()}`}
           </p>
         </div>
 
         <div className="flex gap-3">
-          <button
-            onClick={() => setShowUpload(!showUpload)}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-              showUpload ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200' : 'border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
-            }`}
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Photos
-          </button>
           <ShareButton albumId={album.id} albumName={album.name} />
         </div>
       </div>
-
-      {showUpload && (
-        <div className="mb-8">
-          <UploadDropzone albumId={album.id} onUploadComplete={handleUploadComplete} />
-        </div>
-      )}
 
       <Gallery photos={photos} />
     </div>

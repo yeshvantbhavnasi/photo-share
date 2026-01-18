@@ -308,7 +308,7 @@ class PhotoUploader:
         self.share_links_table.put_item(Item=item)
 
         cloudfront_domain = os.getenv('CLOUDFRONT_DOMAIN', 'your-domain.cloudfront.net')
-        share_url = f"https://{cloudfront_domain}/share/{link_id}/"
+        share_url = f"https://{cloudfront_domain}/shared/?token={link_id}"
 
         print(f"\nShare link created: {share_url}")
         return share_url

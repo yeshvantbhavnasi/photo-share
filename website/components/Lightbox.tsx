@@ -96,8 +96,8 @@ export default function Lightbox({
         onClick={(e) => e.stopPropagation()}
       >
         <Image
-          src={currentPhoto.src}
-          alt={currentPhoto.alt}
+          src={currentPhoto.url}
+          alt={currentPhoto.filename || `Photo ${currentPhoto.id}`}
           fill
           sizes="90vw"
           className="object-contain"
@@ -132,9 +132,9 @@ export default function Lightbox({
       </div>
 
       {/* Photo info */}
-      {currentPhoto.alt && (
+      {currentPhoto.filename && (
         <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-white text-base max-w-md text-center">
-          {currentPhoto.alt}
+          {currentPhoto.filename}
         </div>
       )}
     </div>

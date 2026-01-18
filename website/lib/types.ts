@@ -1,17 +1,18 @@
 export interface PhotoItem {
   id: string;
-  src: string;
-  thumbnailSrc: string;
-  alt: string;
-  width?: number;
-  height?: number;
+  filename?: string;
+  url: string;
+  thumbnailUrl: string;
+  uploadDate?: string;
+  size?: number;
+  contentType?: string;
 }
 
 export interface AlbumItem {
   id: string;
   name: string;
   description?: string;
-  coverSrc?: string;
+  coverPhoto?: string;
   photoCount: number;
   createdAt: string;
 }
