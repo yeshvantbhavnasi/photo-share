@@ -108,3 +108,90 @@ jobs:
       - name: Deployment complete
         run: |
           echo "Deployed to https://d1nf5k4wr11svj.cloudfront.net"
+
+  deploy-lambda:
+    name: Deploy Lambda
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for Lambda changes
+        id: lambda-changes
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q "^lambda/"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python
+        if: steps.lambda-changes.outputs.changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        if: steps.lambda-changes.outputs.changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package Lambda function
+        if: steps.lambda-changes.outputs.changed == 'true'
+        run: |
+          cd lambda
+
+          # Create package directory
+          PACKAGE_DIR="/tmp/lambda-package"
+          rm -rf $PACKAGE_DIR
+          mkdir -p $PACKAGE_DIR
+
+          # Install Pillow for Lambda (Amazon Linux 2)
+          pip install --platform manylinux2014_x86_64 --target $PACKAGE_DIR --implementation cp --python-version 3.11 --only-binary=:all: Pillow
+
+          # Copy Lambda code
+          cp index.py $PACKAGE_DIR/
+          cp image_processor.py $PACKAGE_DIR/
+
+          # Create deployment package
+          cd $PACKAGE_DIR
+          zip -r /tmp/lambda-function.zip .
+
+      - name: Deploy to Lambda
+        if: steps.lambda-changes.outputs.changed == 'true'
+        run: |
+          aws lambda update-function-code \
+            --function-name photo-share-api \
+            --zip-file fileb:///tmp/lambda-function.zip \
+            --region ${{ env.AWS_REGION }}
+
+          echo "Waiting for Lambda update..."
+          sleep 5
+
+          aws lambda update-function-configuration \
+            --function-name photo-share-api \
+            --timeout 120 \
+            --memory-size 1024 \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Lambda deployment complete
+        if: steps.lambda-changes.outputs.changed == 'true'
+        run: |
+          echo "Lambda deployed successfully!"
+          echo "API: https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod"
+
+      - name: No Lambda changes
+        if: steps.lambda-changes.outputs.changed == 'false'
+        run: |
+          echo "No changes to Lambda files, skipping deployment"
