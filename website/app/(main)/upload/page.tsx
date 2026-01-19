@@ -151,7 +151,7 @@ export default function UploadPage() {
             )}
           </div>
 
-          <UploadDropzone albumId={selectedAlbum} onUploadComplete={handleUploadComplete} />
+          <UploadDropzone albumId={selectedAlbum} albumName={currentAlbum?.name} onUploadComplete={handleUploadComplete} />
 
           {uploadCount > 0 && (
             <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">

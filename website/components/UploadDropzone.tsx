@@ -4,12 +4,15 @@ import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { UploadProgress } from '@/lib/types';
 
+const API_ENDPOINT = 'https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod';
+
 interface UploadDropzoneProps {
   albumId: string;
+  albumName?: string;
   onUploadComplete?: (photoId: string) => void;
 }
 
-export default function UploadDropzone({ albumId, onUploadComplete }: UploadDropzoneProps) {
+export default function UploadDropzone({ albumId, albumName, onUploadComplete }: UploadDropzoneProps) {
   const [uploads, setUploads] = useState<UploadProgress[]>([]);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -55,30 +58,30 @@ export default function UploadDropzone({ albumId, onUploadComplete }: UploadDrop
   };
 
   const uploadFile = async (file: File, index: number) => {
-    const photoId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
     try {
       // Update status to uploading
       setUploads((prev) =>
         prev.map((u, i) => (i === index ? { ...u, status: 'uploading' as const, progress: 10 } : u))
       );
 
-      // Get presigned URL from API
-      const presignResponse = await fetch('/api/upload', {
+      // Get presigned URL from Lambda API
+      const presignResponse = await fetch(`${API_ENDPOINT}/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           albumId,
+          albumName: albumName || 'Untitled Album',
           filename: file.name,
-          contentType: file.type,
+          contentType: file.type || 'image/jpeg',
         }),
       });
 
       if (!presignResponse.ok) {
-        throw new Error('Failed to get upload URL');
+        const errorData = await presignResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to get upload URL');
       }
 
-      const { uploadUrl, photoKey, thumbnailKey } = await presignResponse.json();
+      const { uploadUrl, thumbnailUploadUrl, photoKey, thumbnailKey, photoId } = await presignResponse.json();
 
       setUploads((prev) =>
         prev.map((u, i) => (i === index ? { ...u, progress: 30 } : u))
@@ -88,7 +91,7 @@ export default function UploadDropzone({ albumId, onUploadComplete }: UploadDrop
       await fetch(uploadUrl, {
         method: 'PUT',
         body: file,
-        headers: { 'Content-Type': file.type },
+        headers: { 'Content-Type': file.type || 'image/jpeg' },
       });
 
       setUploads((prev) =>
@@ -100,24 +103,35 @@ export default function UploadDropzone({ albumId, onUploadComplete }: UploadDrop
       // Generate and upload thumbnail
       const thumbnail = await generateThumbnail(file);
 
-      const thumbPresignResponse = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          albumId,
-          filename: `${photoId}_thumb.jpg`,
-          contentType: 'image/jpeg',
-          isThumbnail: true,
-        }),
-      });
-
-      if (thumbPresignResponse.ok) {
-        const { uploadUrl: thumbUploadUrl } = await thumbPresignResponse.json();
-        await fetch(thumbUploadUrl, {
+      if (thumbnailUploadUrl) {
+        await fetch(thumbnailUploadUrl, {
           method: 'PUT',
           body: thumbnail,
           headers: { 'Content-Type': 'image/jpeg' },
         });
+      }
+
+      setUploads((prev) =>
+        prev.map((u, i) => (i === index ? { ...u, progress: 80 } : u))
+      );
+
+      // Save metadata to DynamoDB
+      const completeResponse = await fetch(`${API_ENDPOINT}/upload/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          albumId,
+          photoId,
+          filename: file.name,
+          photoKey,
+          thumbnailKey,
+          contentType: file.type || 'image/jpeg',
+          size: file.size,
+        }),
+      });
+
+      if (!completeResponse.ok) {
+        console.warn('Failed to save metadata, but photo was uploaded');
       }
 
       setUploads((prev) =>

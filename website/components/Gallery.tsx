@@ -8,9 +8,10 @@ import Lightbox from './Lightbox';
 interface GalleryProps {
   photos: PhotoItem[];
   showAlbumName?: boolean;
+  readOnly?: boolean;
 }
 
-export default function Gallery({ photos: initialPhotos, showAlbumName }: GalleryProps) {
+export default function Gallery({ photos: initialPhotos, showAlbumName, readOnly = false }: GalleryProps) {
   const [photos, setPhotos] = useState<PhotoItem[]>(initialPhotos);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -107,8 +108,9 @@ export default function Gallery({ photos: initialPhotos, showAlbumName }: Galler
           onClose={closeLightbox}
           onNext={goToNext}
           onPrevious={goToPrevious}
-          onPhotoAdded={handlePhotoAdded}
-          onPhotoDeleted={handlePhotoDeleted}
+          onPhotoAdded={readOnly ? undefined : handlePhotoAdded}
+          onPhotoDeleted={readOnly ? undefined : handlePhotoDeleted}
+          readOnly={readOnly}
         />
       )}
     </>

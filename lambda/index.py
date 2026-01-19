@@ -4,10 +4,14 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from decimal import Decimal
 
-# Initialize DynamoDB
+# Initialize DynamoDB and S3
 dynamodb = boto3.resource('dynamodb')
+s3 = boto3.client('s3')
 photos_table = dynamodb.Table(os.environ.get('PHOTOS_TABLE', 'PhotosMetadata'))
 share_links_table = dynamodb.Table(os.environ.get('SHARE_LINKS_TABLE', 'ShareLinks'))
+
+# S3 bucket for photos
+PHOTOS_BUCKET = os.environ.get('PHOTOS_BUCKET', 'yeshvant-photos-bucket-2024')
 
 # CloudFront domain for photo URLs
 CLOUDFRONT_DOMAIN = os.environ.get('CLOUDFRONT_DOMAIN', 'd1nf5k4wr11svj.cloudfront.net')
@@ -346,6 +350,125 @@ def validate_share_link(token):
         return None, str(e)
 
 
+def create_album_if_not_exists(album_id, album_name, user_id='default-user'):
+    """Create an album in DynamoDB if it doesn't exist"""
+    from datetime import datetime
+
+    # Check if album already exists
+    response = photos_table.get_item(
+        Key={
+            'pk': f'USER#{user_id}',
+            'sk': f'ALBUM#{album_id}'
+        }
+    )
+
+    if 'Item' not in response:
+        # Create the album
+        photos_table.put_item(Item={
+            'pk': f'USER#{user_id}',
+            'sk': f'ALBUM#{album_id}',
+            'albumId': album_id,
+            'name': album_name or 'Untitled Album',
+            'userId': user_id,
+            'createdAt': datetime.utcnow().isoformat() + 'Z'
+        })
+        return True
+    return False
+
+
+def generate_upload_urls(album_id, filename, content_type, user_id='default-user', is_thumbnail=False):
+    """Generate presigned URLs for uploading a photo and optionally its thumbnail"""
+    import uuid
+    from datetime import datetime
+
+    # Generate unique photo ID
+    photo_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+    # Determine S3 keys
+    if is_thumbnail:
+        s3_key = f"thumbnails/{user_id}/{album_id}/{filename}"
+    else:
+        ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
+        s3_key = f"photos/{user_id}/{album_id}/{photo_id}.{ext}"
+        thumbnail_key = f"thumbnails/{user_id}/{album_id}/{photo_id}_thumb.jpg"
+
+    # Generate presigned URL for upload
+    upload_url = s3.generate_presigned_url(
+        'put_object',
+        Params={
+            'Bucket': PHOTOS_BUCKET,
+            'Key': s3_key,
+            'ContentType': content_type
+        },
+        ExpiresIn=3600  # 1 hour
+    )
+
+    result = {
+        'uploadUrl': upload_url,
+        'photoKey': s3_key,
+        'photoId': photo_id
+    }
+
+    if not is_thumbnail:
+        # Also generate thumbnail upload URL
+        thumb_upload_url = s3.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': PHOTOS_BUCKET,
+                'Key': thumbnail_key,
+                'ContentType': 'image/jpeg'
+            },
+            ExpiresIn=3600
+        )
+        result['thumbnailUploadUrl'] = thumb_upload_url
+        result['thumbnailKey'] = thumbnail_key
+
+    return result
+
+
+def save_photo_metadata(album_id, photo_id, filename, s3_key, thumbnail_key, content_type, size=0, user_id='default-user'):
+    """Save photo metadata to DynamoDB"""
+    from datetime import datetime
+
+    upload_date = datetime.utcnow().isoformat() + 'Z'
+    date_str = upload_date[:10]  # YYYY-MM-DD
+
+    # Save photo in album
+    photos_table.put_item(Item={
+        'pk': f'ALBUM#{album_id}',
+        'sk': f'PHOTO#{photo_id}',
+        'photoId': photo_id,
+        'albumId': album_id,
+        'filename': filename,
+        's3Key': s3_key,
+        'thumbnailKey': thumbnail_key,
+        'contentType': content_type,
+        'size': size,
+        'uploadDate': upload_date,
+        'userId': user_id
+    })
+
+    # Also add date index entry for timeline
+    photos_table.put_item(Item={
+        'pk': f'USER#{user_id}',
+        'sk': f'DATE#{date_str}#PHOTO#{photo_id}',
+        'photoId': photo_id,
+        'albumId': album_id,
+        'filename': filename,
+        's3Key': s3_key,
+        'thumbnailKey': thumbnail_key,
+        'contentType': content_type,
+        'size': size,
+        'uploadDate': upload_date
+    })
+
+    return {
+        'photoId': photo_id,
+        'url': f"https://{CLOUDFRONT_DOMAIN}/{s3_key}",
+        'thumbnailUrl': f"https://{CLOUDFRONT_DOMAIN}/{thumbnail_key}" if thumbnail_key else None
+    }
+
+
 def lambda_handler(event, context):
     """Main Lambda handler"""
 
@@ -489,6 +612,53 @@ def lambda_handler(event, context):
                 return cors_response(404, {'error': str(e)})
             except Exception as e:
                 return cors_response(500, {'error': f'Hide failed: {str(e)}'})
+
+        # Route: POST /upload - Get presigned URLs for uploading photos
+        if (path == '/upload' or path == '/api/upload') and http_method == 'POST':
+            try:
+                body = json.loads(event.get('body', '{}'))
+                album_id = body.get('albumId')
+                album_name = body.get('albumName', 'Untitled Album')
+                filename = body.get('filename')
+                content_type = body.get('contentType', 'image/jpeg')
+
+                if not album_id:
+                    return cors_response(400, {'error': 'Missing albumId'})
+                if not filename:
+                    return cors_response(400, {'error': 'Missing filename'})
+
+                # Create album if it doesn't exist
+                create_album_if_not_exists(album_id, album_name)
+
+                # Generate presigned upload URLs
+                result = generate_upload_urls(album_id, filename, content_type)
+                return cors_response(200, result)
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Upload preparation failed: {str(e)}'})
+
+        # Route: POST /upload/complete - Save photo metadata after successful upload
+        if (path == '/upload/complete' or path == '/api/upload/complete') and http_method == 'POST':
+            try:
+                body = json.loads(event.get('body', '{}'))
+                album_id = body.get('albumId')
+                photo_id = body.get('photoId')
+                filename = body.get('filename')
+                photo_key = body.get('photoKey')
+                thumbnail_key = body.get('thumbnailKey')
+                content_type = body.get('contentType', 'image/jpeg')
+                size = body.get('size', 0)
+
+                if not album_id or not photo_id or not photo_key:
+                    return cors_response(400, {'error': 'Missing required fields: albumId, photoId, photoKey'})
+
+                result = save_photo_metadata(
+                    album_id, photo_id, filename, photo_key, thumbnail_key, content_type, size
+                )
+                return cors_response(200, result)
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Save metadata failed: {str(e)}'})
 
         # Default: return 404
         return cors_response(404, {'error': 'Not found', 'path': path})
