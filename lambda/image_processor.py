@@ -627,45 +627,18 @@ def _style_transfer_with_bedrock(image, style):
     bedrock = get_bedrock_client()
 
     # Detailed style prompts - these drive the style transformation
-    # creativity must be between 0.1 and 0.5 (use max 0.5 for strongest effect)
-    style_configs = {
-        'watercolor': {
-            'prompt': 'beautiful watercolor painting, soft translucent colors, wet on wet technique, flowing paint washes, delicate brush strokes, artistic watercolor artwork',
-            'negative_prompt': 'photograph, realistic, sharp edges, digital art',
-            'creativity': 0.5
-        },
-        'oil_painting': {
-            'prompt': 'classical oil painting masterpiece, rich vibrant colors, dramatic chiaroscuro lighting, visible brush strokes, thick impasto technique, museum quality fine art',
-            'negative_prompt': 'photograph, flat colors, digital, cartoon',
-            'creativity': 0.5
-        },
-        'sketch': {
-            'prompt': 'detailed pencil sketch drawing, black and white, fine line work, cross hatching shading, artistic hand drawn illustration, graphite on paper',
-            'negative_prompt': 'color, photograph, painting, digital',
-            'creativity': 0.5
-        },
-        'anime': {
-            'prompt': 'anime art style, vibrant saturated colors, clean cel shading, manga illustration, Japanese animation style, detailed anime artwork',
-            'negative_prompt': 'photograph, realistic, western cartoon',
-            'creativity': 0.5
-        },
-        'pop_art': {
-            'prompt': 'bold pop art style, vibrant primary colors, Ben-Day dots, comic book aesthetic, Andy Warhol inspired, retro graphic art',
-            'negative_prompt': 'photograph, muted colors, realistic',
-            'creativity': 0.5
-        },
-        'impressionist': {
-            'prompt': 'impressionist painting, soft dreamy brush strokes, dappled light effects, Monet Renoir style, en plein air aesthetic, artistic impressionism',
-            'negative_prompt': 'photograph, sharp focus, digital, realistic',
-            'creativity': 0.5
-        }
+    # Creative Upscale only supports: image, prompt, creativity, output_format
+    # creativity must be between 0.1 and 0.5
+    style_prompts = {
+        'watercolor': 'beautiful watercolor painting, soft translucent colors, wet on wet technique, flowing paint washes, delicate brush strokes, artistic watercolor artwork',
+        'oil_painting': 'classical oil painting masterpiece, rich vibrant colors, dramatic chiaroscuro lighting, visible brush strokes, thick impasto technique, museum quality fine art',
+        'sketch': 'detailed pencil sketch drawing, black and white, fine line work, cross hatching shading, artistic hand drawn illustration, graphite on paper',
+        'anime': 'anime art style, vibrant saturated colors, clean cel shading, manga illustration, Japanese animation style, detailed anime artwork',
+        'pop_art': 'bold pop art style, vibrant primary colors, Ben-Day dots, comic book aesthetic, Andy Warhol inspired, retro graphic art',
+        'impressionist': 'impressionist painting, soft dreamy brush strokes, dappled light effects, Monet Renoir style, en plein air aesthetic, artistic impressionism'
     }
 
-    config = style_configs.get(style, {
-        'prompt': 'artistic stylized image',
-        'negative_prompt': 'photograph',
-        'creativity': 0.45
-    })
+    prompt = style_prompts.get(style, 'artistic stylized image')
 
     # Resize smaller for faster processing
     image = _resize_for_bedrock(image, max_pixels=400000)
@@ -695,9 +668,8 @@ def _style_transfer_with_bedrock(image, style):
                 modelId='us.stability.stable-creative-upscale-v1:0',
                 body=json.dumps({
                     'image': image_base64,
-                    'prompt': config['prompt'],
-                    'negative_prompt': config['negative_prompt'],
-                    'creativity': config['creativity'],
+                    'prompt': prompt,
+                    'creativity': 0.5,
                     'output_format': 'jpeg'
                 })
             )
