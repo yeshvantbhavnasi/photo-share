@@ -582,7 +582,7 @@ def _remove_bg_with_bedrock(image):
 
 
 def style_transfer(photo_id, style):
-    """Apply artistic style to image using Pillow filters
+    """Apply artistic style to image using SD3 Large image-to-image
 
     Args:
         photo_id: ID of the photo
@@ -604,8 +604,12 @@ def style_transfer(photo_id, style):
     s3_key = photo_meta.get('s3Key')
     image = download_image_from_s3(s3_key)
 
-    print(f"Applying {style} style transfer using Pillow")
-    result = _style_transfer_with_pillow(image, style)
+    try:
+        print(f"Applying {style} style transfer using SD3 Large")
+        result = _style_transfer_with_sd3(image, style)
+    except Exception as e:
+        print(f"SD3 style transfer failed: {e}, falling back to Pillow")
+        result = _style_transfer_with_pillow(image, style)
 
     return save_edited_photo(
         original_photo=photo_meta,
@@ -613,6 +617,81 @@ def style_transfer(photo_id, style):
         edit_operation=f'style_{style}',
         edit_parameters={'style': style}
     )
+
+
+def _style_transfer_with_sd3(image, style):
+    """Apply artistic style using SD3 Large image-to-image mode.
+
+    Uses Stable Diffusion 3 Large with image-to-image mode where:
+    - image: the input image to transform
+    - prompt: describes the desired style
+    - strength: how much to transform (0.6-0.8 for style transfer)
+    - mode: 'image-to-image'
+    """
+    import time
+    bedrock = get_bedrock_client()
+
+    # Style prompts for SD3 image-to-image
+    style_prompts = {
+        'watercolor': 'beautiful watercolor painting, soft translucent colors, wet brush strokes, artistic watercolor artwork, painted on paper',
+        'oil_painting': 'classical oil painting, rich vibrant colors, visible brush strokes, thick impasto technique, museum quality fine art masterpiece',
+        'sketch': 'detailed pencil sketch drawing, black and white, fine line work, cross hatching shading, graphite on paper, hand drawn illustration',
+        'anime': 'anime art style illustration, vibrant saturated colors, clean cel shading, manga style, Japanese animation artwork',
+        'pop_art': 'bold pop art style, vibrant primary colors, Ben-Day dots pattern, comic book aesthetic, Andy Warhol inspired artwork',
+        'impressionist': 'impressionist painting, soft dreamy brush strokes, dappled light effects, Monet style, en plein air artwork'
+    }
+
+    prompt = style_prompts.get(style, 'artistic stylized image')
+
+    # Resize for Bedrock (SD3 works best with reasonable sizes)
+    image = _resize_for_bedrock(image, max_pixels=500000)
+    print(f"Image for SD3 style_transfer: {image.width}x{image.height}, style: {style}")
+
+    # Convert to RGB if needed
+    if image.mode == 'RGBA':
+        bg = Image.new('RGB', image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    elif image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Convert image to base64 as JPEG
+    buffer = io.BytesIO()
+    image.save(buffer, format='JPEG', quality=90)
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+    # Retry up to 3 times
+    max_retries = 3
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            response = bedrock.invoke_model(
+                modelId='us.stability.sd3-large-v1:0',
+                body=json.dumps({
+                    'prompt': prompt,
+                    'image': image_base64,
+                    'strength': 0.7,
+                    'mode': 'image-to-image',
+                    'output_format': 'jpeg'
+                })
+            )
+
+            response_body = json.loads(response['body'].read())
+            result_base64 = response_body['images'][0]
+            result_data = base64.b64decode(result_base64)
+            print(f"SD3 style transfer succeeded on attempt {attempt + 1}")
+            return Image.open(io.BytesIO(result_data))
+
+        except Exception as e:
+            last_error = e
+            print(f"SD3 style transfer attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+
+    # All retries failed
+    raise last_error
 
 
 def _style_transfer_with_pillow(image, style):
