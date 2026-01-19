@@ -582,7 +582,7 @@ def _remove_bg_with_bedrock(image):
 
 
 def style_transfer(photo_id, style):
-    """Apply artistic style to image using Stability AI via Bedrock
+    """Apply artistic style to image using Pillow filters
 
     Args:
         photo_id: ID of the photo
@@ -604,10 +604,8 @@ def style_transfer(photo_id, style):
     s3_key = photo_meta.get('s3Key')
     image = download_image_from_s3(s3_key)
 
-    try:
-        result = _style_transfer_with_bedrock(image, style)
-    except Exception as e:
-        raise ValueError(f"Style transfer failed: {e}")
+    print(f"Applying {style} style transfer using Pillow")
+    result = _style_transfer_with_pillow(image, style)
 
     return save_edited_photo(
         original_photo=photo_meta,
@@ -617,85 +615,78 @@ def style_transfer(photo_id, style):
     )
 
 
-def _style_transfer_with_bedrock(image, style):
-    """Apply artistic style using Stability AI Creative Upscale with descriptive prompts
+def _style_transfer_with_pillow(image, style):
+    """Apply artistic style effects using Pillow filters.
 
-    Note: style_preset is NOT a valid parameter for Creative Upscale model.
-    We achieve style transfer through detailed prompts and higher creativity values.
+    This provides reliable style transfer without depending on external AI services.
     """
-    import time
-    bedrock = get_bedrock_client()
+    from PIL import ImageFilter, ImageOps
 
-    # Detailed style prompts - these drive the style transformation
-    # Creative Upscale only supports: image, prompt, creativity, output_format
-    # creativity must be between 0.1 and 0.5
-    style_prompts = {
-        'watercolor': 'beautiful watercolor painting, soft translucent colors, wet on wet technique, flowing paint washes, delicate brush strokes, artistic watercolor artwork',
-        'oil_painting': 'classical oil painting masterpiece, rich vibrant colors, dramatic chiaroscuro lighting, visible brush strokes, thick impasto technique, museum quality fine art',
-        'sketch': 'detailed pencil sketch drawing, black and white, fine line work, cross hatching shading, artistic hand drawn illustration, graphite on paper',
-        'anime': 'anime art style, vibrant saturated colors, clean cel shading, manga illustration, Japanese animation style, detailed anime artwork',
-        'pop_art': 'bold pop art style, vibrant primary colors, Ben-Day dots, comic book aesthetic, Andy Warhol inspired, retro graphic art',
-        'impressionist': 'impressionist painting, soft dreamy brush strokes, dappled light effects, Monet Renoir style, en plein air aesthetic, artistic impressionism'
-    }
-
-    prompt = style_prompts.get(style, 'artistic stylized image')
-
-    # Resize smaller for faster processing
-    image = _resize_for_bedrock(image, max_pixels=400000)
-    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}, style: {style}")
-
-    # Convert to RGB if needed
-    if image.mode == 'RGBA':
-        bg = Image.new('RGB', image.size, (255, 255, 255))
-        bg.paste(image, mask=image.split()[3])
-        image = bg
-    elif image.mode != 'RGB':
+    # Ensure RGB mode
+    if image.mode != 'RGB':
         image = image.convert('RGB')
 
-    # Convert image to base64 as JPEG
-    buffer = io.BytesIO()
-    image.save(buffer, format='JPEG', quality=85)
-    buffer.seek(0)
-    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    if style == 'watercolor':
+        # Watercolor: smooth + saturate + slight blur
+        img = image.filter(ImageFilter.SMOOTH_MORE)
+        img = img.filter(ImageFilter.SMOOTH_MORE)
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(1.3)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(0.9)
+        return img
 
-    # Retry up to 3 times on transient errors
-    max_retries = 3
-    last_error = None
+    elif style == 'oil_painting':
+        # Oil painting: edge enhance + boost colors + smooth
+        img = image.filter(ImageFilter.EDGE_ENHANCE)
+        img = img.filter(ImageFilter.SMOOTH)
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(1.4)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.2)
+        return img
 
-    for attempt in range(max_retries):
-        try:
-            response = bedrock.invoke_model(
-                modelId='us.stability.stable-creative-upscale-v1:0',
-                body=json.dumps({
-                    'image': image_base64,
-                    'prompt': prompt,
-                    'creativity': 0.5,
-                    'output_format': 'jpeg'
-                })
-            )
+    elif style == 'sketch':
+        # Sketch: grayscale + edge detection + invert
+        img = ImageOps.grayscale(image)
+        img = img.filter(ImageFilter.FIND_EDGES)
+        img = ImageOps.invert(img)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+        return img.convert('RGB')
 
-            response_body = json.loads(response['body'].read())
-            result_base64 = response_body['images'][0]
-            result_data = base64.b64decode(result_base64)
-            print(f"Style transfer succeeded on attempt {attempt + 1}")
-            return Image.open(io.BytesIO(result_data))
+    elif style == 'anime':
+        # Anime: posterize + edge enhance + saturate
+        img = ImageOps.posterize(image, 4)
+        img = img.filter(ImageFilter.EDGE_ENHANCE_MORE)
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(1.5)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.3)
+        return img
 
-        except Exception as e:
-            last_error = e
-            print(f"Style transfer attempt {attempt + 1}/{max_retries} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(1.5)  # Brief pause before retry
+    elif style == 'pop_art':
+        # Pop art: heavy posterize + high saturation
+        img = ImageOps.posterize(image, 3)
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(2.0)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+        return img
 
-    # All retries failed - throw user-friendly error
-    error_msg = str(last_error)
-    if "ModelErrorException" in error_msg:
-        raise ValueError(f"Style transfer service temporarily unavailable. Please try again in a moment.")
-    elif "ValidationException" in error_msg:
-        raise ValueError(f"Image could not be processed. Try a different image or style.")
-    elif "AccessDeniedException" in error_msg:
-        raise ValueError(f"Style transfer service not configured. Contact administrator.")
+    elif style == 'impressionist':
+        # Impressionist: blur + color boost
+        img = image.filter(ImageFilter.GaussianBlur(radius=1.5))
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(1.3)
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(1.1)
+        return img
+
     else:
-        raise ValueError(f"Style transfer failed after {max_retries} attempts. Please try again.")
+        # Default: slight enhancement
+        enhancer = ImageEnhance.Color(image)
+        return enhancer.enhance(1.2)
 
 
 def process_image_edit(photo_id, operation, parameters=None):
