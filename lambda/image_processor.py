@@ -323,16 +323,25 @@ def _enhance_with_bedrock(image, params):
     """Enhance image using Stability AI Creative Upscale via Bedrock
 
     Uses Creative Upscale with enhancement prompt for AI-powered image enhancement.
+    Uses JPEG to avoid response size limits.
     """
     bedrock = get_bedrock_client()
 
-    # Resize if too large (for faster processing within API Gateway timeout)
-    image = _resize_for_bedrock(image, max_pixels=800000)
+    # Resize smaller for faster processing within API Gateway timeout
+    image = _resize_for_bedrock(image, max_pixels=500000)
     print(f"Image for Bedrock enhance: {image.width}x{image.height}")
 
-    # Convert image to base64
+    # Convert to RGB if needed (for JPEG compatibility)
+    if image.mode == 'RGBA':
+        bg = Image.new('RGB', image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    elif image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Convert image to base64 as JPEG
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG', optimize=True)
+    image.save(buffer, format='JPEG', quality=90)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
@@ -344,7 +353,7 @@ def _enhance_with_bedrock(image, params):
             'prompt': 'enhance photo quality, improve lighting, vivid colors, sharp details, professional photography',
             'negative_prompt': 'blurry, low quality, distorted, overexposed, underexposed',
             'creativity': 0.2,  # Lower = keep more of original
-            'output_format': 'png'
+            'output_format': 'jpeg'
         })
     )
 
@@ -410,25 +419,34 @@ def _upscale_with_bedrock(image, scale_factor):
 
     Fast Upscale: max 1,048,576 pixels (1MP), 4x upscale
     Resizes input to fit within limit for faster processing.
+    Uses JPEG output to avoid response size limits.
     """
     bedrock = get_bedrock_client()
 
-    # Resize to fit within Fast Upscale limit (1MP) for speed
-    image = _resize_for_bedrock(image, max_pixels=800000)
+    # Resize to smaller size to keep response under 16MB limit
+    image = _resize_for_bedrock(image, max_pixels=500000)
     print(f"Image for Bedrock upscale: {image.width}x{image.height}")
+
+    # Convert to RGB if needed (for JPEG compatibility)
+    if image.mode == 'RGBA':
+        bg = Image.new('RGB', image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    elif image.mode != 'RGB':
+        image = image.convert('RGB')
 
     # Convert image to base64
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG', optimize=True)
+    image.save(buffer, format='JPEG', quality=90)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use Fast Upscale (simpler API, no prompt needed)
+    # Use Fast Upscale with JPEG output (smaller response size)
     response = bedrock.invoke_model(
         modelId='us.stability.stable-fast-upscale-v1:0',
         body=json.dumps({
             'image': image_base64,
-            'output_format': 'png'
+            'output_format': 'jpeg'
         })
     )
 
@@ -474,17 +492,25 @@ def _remove_bg_with_bedrock(image):
     """Remove background using Stability AI Remove Background service via Bedrock"""
     bedrock = get_bedrock_client()
 
-    # Resize for faster processing
-    image = _resize_for_bedrock(image, max_pixels=800000)
+    # Resize smaller for faster processing
+    image = _resize_for_bedrock(image, max_pixels=500000)
     print(f"Image for Bedrock remove_bg: {image.width}x{image.height}")
 
-    # Convert image to base64
+    # Convert to RGB for input (output will be PNG with transparency)
+    if image.mode == 'RGBA':
+        bg = Image.new('RGB', image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    elif image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Convert image to base64 as JPEG for smaller input
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG', optimize=True)
+    image.save(buffer, format='JPEG', quality=90)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use dedicated Remove Background model
+    # Use dedicated Remove Background model (PNG output for transparency)
     response = bedrock.invoke_model(
         modelId='us.stability.stable-image-remove-background-v1:0',
         body=json.dumps({
@@ -563,13 +589,21 @@ def _style_transfer_with_bedrock(image, style):
     style_preset = style_preset_map.get(style, 'digital-art')
     prompt = style_prompts.get(style, 'artistic style transformation')
 
-    # Resize for faster processing
-    image = _resize_for_bedrock(image, max_pixels=800000)
+    # Resize smaller for faster processing
+    image = _resize_for_bedrock(image, max_pixels=500000)
     print(f"Image for Bedrock style_transfer: {image.width}x{image.height}")
 
-    # Convert image to base64
+    # Convert to RGB if needed (for JPEG compatibility)
+    if image.mode == 'RGBA':
+        bg = Image.new('RGB', image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    elif image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Convert image to base64 as JPEG
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG', optimize=True)
+    image.save(buffer, format='JPEG', quality=90)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
@@ -581,7 +615,7 @@ def _style_transfer_with_bedrock(image, style):
             'prompt': prompt,
             'style_preset': style_preset,
             'creativity': 0.5,  # Higher creativity for more style transformation
-            'output_format': 'png'
+            'output_format': 'jpeg'
         })
     )
 
