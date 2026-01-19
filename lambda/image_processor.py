@@ -618,38 +618,58 @@ def style_transfer(photo_id, style):
 
 
 def _style_transfer_with_bedrock(image, style):
-    """Apply artistic style using Stability AI Creative Upscale with style presets"""
+    """Apply artistic style using Stability AI Creative Upscale with descriptive prompts
+
+    Note: style_preset is NOT a valid parameter for Creative Upscale model.
+    We achieve style transfer through detailed prompts and higher creativity values.
+    """
     import time
     bedrock = get_bedrock_client()
 
-    # Map our style names to Stability AI style_preset values
-    # Valid presets: 3d-model, analog-film, anime, cinematic, comic-book, digital-art,
-    # enhance, fantasy-art, isometric, line-art, low-poly, neon-punk, photographic, pixel-art
-    style_preset_map = {
-        'watercolor': 'analog-film',
-        'oil_painting': 'cinematic',
-        'sketch': 'line-art',
-        'anime': 'anime',
-        'pop_art': 'comic-book',
-        'impressionist': 'fantasy-art'
+    # Detailed style prompts - these drive the style transformation
+    # Higher creativity (0.5-0.7) allows more artistic interpretation
+    style_configs = {
+        'watercolor': {
+            'prompt': 'beautiful watercolor painting, soft translucent colors, wet on wet technique, flowing paint washes, delicate brush strokes, artistic watercolor artwork',
+            'negative_prompt': 'photograph, realistic, sharp edges, digital art',
+            'creativity': 0.55
+        },
+        'oil_painting': {
+            'prompt': 'classical oil painting masterpiece, rich vibrant colors, dramatic chiaroscuro lighting, visible brush strokes, thick impasto technique, museum quality fine art',
+            'negative_prompt': 'photograph, flat colors, digital, cartoon',
+            'creativity': 0.55
+        },
+        'sketch': {
+            'prompt': 'detailed pencil sketch drawing, black and white, fine line work, cross hatching shading, artistic hand drawn illustration, graphite on paper',
+            'negative_prompt': 'color, photograph, painting, digital',
+            'creativity': 0.6
+        },
+        'anime': {
+            'prompt': 'anime art style, vibrant saturated colors, clean cel shading, manga illustration, Japanese animation style, detailed anime artwork',
+            'negative_prompt': 'photograph, realistic, western cartoon',
+            'creativity': 0.55
+        },
+        'pop_art': {
+            'prompt': 'bold pop art style, vibrant primary colors, Ben-Day dots, comic book aesthetic, Andy Warhol inspired, retro graphic art',
+            'negative_prompt': 'photograph, muted colors, realistic',
+            'creativity': 0.6
+        },
+        'impressionist': {
+            'prompt': 'impressionist painting, soft dreamy brush strokes, dappled light effects, Monet Renoir style, en plein air aesthetic, artistic impressionism',
+            'negative_prompt': 'photograph, sharp focus, digital, realistic',
+            'creativity': 0.55
+        }
     }
 
-    # Style prompts for additional guidance
-    style_prompts = {
-        'watercolor': 'watercolor painting, soft colors, flowing brush strokes',
-        'oil_painting': 'oil painting, rich colors, dramatic lighting, fine art',
-        'sketch': 'pencil sketch, black and white, detailed line drawing',
-        'anime': 'anime style, vibrant colors, clean lines',
-        'pop_art': 'pop art, bold colors, comic book style',
-        'impressionist': 'impressionist art, soft brush strokes, dreamy'
-    }
-
-    style_preset = style_preset_map.get(style, 'digital-art')
-    prompt = style_prompts.get(style, 'artistic style')
+    config = style_configs.get(style, {
+        'prompt': 'artistic stylized image',
+        'negative_prompt': 'photograph',
+        'creativity': 0.5
+    })
 
     # Resize smaller for faster processing
     image = _resize_for_bedrock(image, max_pixels=400000)
-    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}, style: {style_preset}")
+    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}, style: {style}")
 
     # Convert to RGB if needed
     if image.mode == 'RGBA':
@@ -675,9 +695,9 @@ def _style_transfer_with_bedrock(image, style):
                 modelId='us.stability.stable-creative-upscale-v1:0',
                 body=json.dumps({
                     'image': image_base64,
-                    'prompt': prompt,
-                    'style_preset': style_preset,
-                    'creativity': 0.45,
+                    'prompt': config['prompt'],
+                    'negative_prompt': config['negative_prompt'],
+                    'creativity': config['creativity'],
                     'output_format': 'jpeg'
                 })
             )
