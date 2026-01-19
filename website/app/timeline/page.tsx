@@ -97,6 +97,49 @@ export default function TimelinePage() {
     }
   };
 
+  const handlePhotoAdded = (newPhoto: PhotoItem) => {
+    if (timelineData) {
+      const date = newPhoto.uploadDate?.substring(0, 10) || new Date().toISOString().substring(0, 10);
+      setTimelineData({
+        ...timelineData,
+        photos: [...timelineData.photos, newPhoto],
+        byDate: {
+          ...timelineData.byDate,
+          [date]: [...(timelineData.byDate[date] || []), newPhoto],
+        },
+        totalCount: timelineData.totalCount + 1,
+      });
+    }
+  };
+
+  const handlePhotoDeleted = (photoId: string) => {
+    if (timelineData) {
+      const newPhotos = timelineData.photos.filter((p) => p.id !== photoId);
+      const newByDate: { [date: string]: PhotoItem[] } = {};
+
+      for (const [date, photos] of Object.entries(timelineData.byDate)) {
+        const filtered = photos.filter((p) => p.id !== photoId);
+        if (filtered.length > 0) {
+          newByDate[date] = filtered;
+        }
+      }
+
+      setTimelineData({
+        ...timelineData,
+        photos: newPhotos,
+        byDate: newByDate,
+        totalCount: newPhotos.length,
+      });
+
+      // Adjust index if needed
+      if (selectedIndex >= newPhotos.length && newPhotos.length > 0) {
+        setSelectedIndex(newPhotos.length - 1);
+      } else if (newPhotos.length === 0) {
+        setSelectedIndex(-1);
+      }
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="max-w-6xl mx-auto">
@@ -257,6 +300,8 @@ export default function TimelinePage() {
           onClose={handleCloseLightbox}
           onNext={handleNext}
           onPrevious={handlePrevious}
+          onPhotoAdded={handlePhotoAdded}
+          onPhotoDeleted={handlePhotoDeleted}
         />
       )}
     </div>

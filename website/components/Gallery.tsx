@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Image from 'next/image';
 import { PhotoItem } from '@/lib/types';
 import Lightbox from './Lightbox';
@@ -10,9 +10,15 @@ interface GalleryProps {
   showAlbumName?: boolean;
 }
 
-export default function Gallery({ photos, showAlbumName }: GalleryProps) {
+export default function Gallery({ photos: initialPhotos, showAlbumName }: GalleryProps) {
+  const [photos, setPhotos] = useState<PhotoItem[]>(initialPhotos);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
+
+  // Update local photos when props change
+  useEffect(() => {
+    setPhotos(initialPhotos);
+  }, [initialPhotos]);
 
   const openLightbox = useCallback((index: number) => {
     setCurrentIndex(index);
@@ -30,6 +36,21 @@ export default function Gallery({ photos, showAlbumName }: GalleryProps) {
   const goToPrevious = useCallback(() => {
     setCurrentIndex((prev) => (prev - 1 + photos.length) % photos.length);
   }, [photos.length]);
+
+  const handlePhotoAdded = useCallback((newPhoto: PhotoItem) => {
+    setPhotos((prev) => [...prev, newPhoto]);
+  }, []);
+
+  const handlePhotoDeleted = useCallback((photoId: string) => {
+    setPhotos((prev) => {
+      const newPhotos = prev.filter((p) => p.id !== photoId);
+      // Adjust current index if needed
+      if (currentIndex >= newPhotos.length && newPhotos.length > 0) {
+        setCurrentIndex(newPhotos.length - 1);
+      }
+      return newPhotos;
+    });
+  }, [currentIndex]);
 
   if (photos.length === 0) {
     return (
@@ -81,6 +102,8 @@ export default function Gallery({ photos, showAlbumName }: GalleryProps) {
           onClose={closeLightbox}
           onNext={goToNext}
           onPrevious={goToPrevious}
+          onPhotoAdded={handlePhotoAdded}
+          onPhotoDeleted={handlePhotoDeleted}
         />
       )}
     </>

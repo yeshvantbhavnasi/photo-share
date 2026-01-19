@@ -96,7 +96,7 @@ EOF
         --policy-name S3Access \
         --policy-document file:///tmp/s3-policy.json
 
-    # Create Bedrock policy for AI features
+    # Create Bedrock policy for AI features (includes inference-profile for new Stability AI models)
     cat > /tmp/bedrock-policy.json << 'EOF'
 {
   "Version": "2012-10-17",
@@ -106,7 +106,10 @@ EOF
       "Action": [
         "bedrock:InvokeModel"
       ],
-      "Resource": "arn:aws:bedrock:*::foundation-model/stability.*"
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/stability.*",
+        "arn:aws:bedrock:*:*:inference-profile/us.stability.*"
+      ]
     }
   ]
 }
@@ -159,8 +162,8 @@ if [ -z "$FUNCTION_EXISTS" ]; then
         --role $ROLE_ARN \
         --handler index.lambda_handler \
         --zip-file fileb:///tmp/lambda-function.zip \
-        --timeout 60 \
-        --memory-size 512 \
+        --timeout 120 \
+        --memory-size 1024 \
         --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
         --region $REGION
 else
@@ -175,6 +178,8 @@ else
 
     aws lambda update-function-configuration \
         --function-name $FUNCTION_NAME \
+        --timeout 120 \
+        --memory-size 1024 \
         --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
         --region $REGION
 fi

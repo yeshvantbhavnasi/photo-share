@@ -73,22 +73,37 @@ def upload_image_to_s3(image, s3_key, content_type='image/jpeg'):
     # Determine format from content type or key
     if content_type == 'image/png' or s3_key.endswith('.png'):
         format_type = 'PNG'
+        actual_content_type = 'image/png'
+        # Ensure image is in a mode compatible with PNG
+        if image.mode not in ['RGB', 'RGBA', 'L', 'LA', 'P']:
+            image = image.convert('RGBA')
     else:
         format_type = 'JPEG'
-        # Convert RGBA to RGB for JPEG
+        actual_content_type = 'image/jpeg'
+        # Convert to RGB for JPEG (JPEG doesn't support alpha)
         if image.mode == 'RGBA':
             background = Image.new('RGB', image.size, (255, 255, 255))
             background.paste(image, mask=image.split()[3])
             image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
 
-    image.save(buffer, format=format_type, quality=95)
+    # Save with appropriate settings
+    if format_type == 'PNG':
+        image.save(buffer, format=format_type, optimize=True)
+    else:
+        image.save(buffer, format=format_type, quality=95, optimize=True)
+
     buffer.seek(0)
+    image_bytes = buffer.getvalue()
+
+    print(f"Uploading to S3: {s3_key}, size: {len(image_bytes)} bytes, format: {format_type}")
 
     s3.put_object(
         Bucket=PHOTOS_BUCKET,
         Key=s3_key,
-        Body=buffer.getvalue(),
-        ContentType=content_type
+        Body=image_bytes,
+        ContentType=actual_content_type
     )
 
 
@@ -291,7 +306,10 @@ def _enhance_with_pillow(image, params):
 
 
 def _enhance_with_bedrock(image, params):
-    """Enhance image using Stability AI via Bedrock"""
+    """Enhance image using Stability AI Creative Upscale via Bedrock
+
+    Uses Creative Upscale with enhancement prompt for AI-powered image enhancement.
+    """
     bedrock = get_bedrock_client()
 
     # Convert image to base64
@@ -300,29 +318,22 @@ def _enhance_with_bedrock(image, params):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Call Stability AI for enhancement
+    # Use Creative Upscale with enhancement prompt
     response = bedrock.invoke_model(
-        modelId='stability.stable-diffusion-xl-v1',
-        contentType='application/json',
-        accept='application/json',
+        modelId='us.stability.stable-creative-upscale-v1:0',
         body=json.dumps({
-            'text_prompts': [
-                {'text': 'enhance photo quality, improve lighting, color correction, high quality', 'weight': 1.0},
-                {'text': 'blurry, low quality, distorted', 'weight': -1.0}
-            ],
-            'init_image': image_base64,
-            'init_image_mode': 'IMAGE_STRENGTH',
-            'image_strength': 0.35,  # Lower = keep more of original
-            'cfg_scale': 7,
-            'samples': 1,
-            'steps': 30
+            'image': image_base64,
+            'prompt': 'enhance photo quality, improve lighting, vivid colors, sharp details, professional photography',
+            'negative_prompt': 'blurry, low quality, distorted, overexposed, underexposed',
+            'creativity': 0.2,  # Lower = keep more of original
+            'output_format': 'png'
         })
     )
 
     response_body = json.loads(response['body'].read())
 
-    # Decode result image
-    result_base64 = response_body['artifacts'][0]['base64']
+    # Decode result image (new API uses 'images' array)
+    result_base64 = response_body['images'][0]
     result_data = base64.b64decode(result_base64)
 
     return Image.open(io.BytesIO(result_data))
@@ -350,13 +361,23 @@ def upscale_image(photo_id, scale_factor=2):
     s3_key = photo_meta.get('s3Key')
     image = download_image_from_s3(s3_key)
 
+    print(f"Original image: {image.width}x{image.height}, mode: {image.mode}")
+
     try:
         upscaled = _upscale_with_bedrock(image, scale_factor)
+        print(f"Bedrock upscaled image: {upscaled.width}x{upscaled.height}, mode: {upscaled.mode}")
     except Exception as e:
         print(f"Bedrock upscale failed, using fallback: {e}")
-        # Fallback to Pillow resize
+        # Fallback to Pillow resize with proper mode handling
+        if image.mode not in ['RGB', 'RGBA']:
+            image = image.convert('RGB')
         new_size = (image.width * scale_factor, image.height * scale_factor)
         upscaled = image.resize(new_size, Image.Resampling.LANCZOS)
+        print(f"Pillow upscaled image: {upscaled.width}x{upscaled.height}, mode: {upscaled.mode}")
+
+    # Ensure the upscaled image is in a valid mode
+    if upscaled.mode not in ['RGB', 'RGBA', 'L']:
+        upscaled = upscaled.convert('RGB')
 
     return save_edited_photo(
         original_photo=photo_meta,
@@ -367,8 +388,26 @@ def upscale_image(photo_id, scale_factor=2):
 
 
 def _upscale_with_bedrock(image, scale_factor):
-    """Upscale image using Stability AI via Bedrock"""
+    """Upscale image using Stability AI Upscale services via Bedrock
+
+    - Fast Upscale: max 1,048,576 pixels (1MP), 4x upscale
+    - Conservative Upscale: max 9,437,184 pixels (~9MP), needs prompt
+    """
     bedrock = get_bedrock_client()
+
+    # Calculate current pixel count
+    total_pixels = image.width * image.height
+    max_fast_pixels = 1048576  # 1MP limit for Fast Upscale
+    max_conservative_pixels = 9437184  # ~9MP limit for Conservative Upscale
+
+    # If image is too large even for Conservative, resize it down first
+    if total_pixels > max_conservative_pixels:
+        # Calculate scale to fit within limit
+        scale = (max_conservative_pixels / total_pixels) ** 0.5
+        new_width = int(image.width * scale)
+        new_height = int(image.height * scale)
+        image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        total_pixels = new_width * new_height
 
     # Convert image to base64
     buffer = io.BytesIO()
@@ -376,32 +415,30 @@ def _upscale_with_bedrock(image, scale_factor):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Calculate target dimensions
-    target_width = image.width * scale_factor
-    target_height = image.height * scale_factor
-
-    # Call Stability AI for upscaling
-    response = bedrock.invoke_model(
-        modelId='stability.stable-diffusion-xl-v1',
-        contentType='application/json',
-        accept='application/json',
-        body=json.dumps({
-            'text_prompts': [
-                {'text': 'high resolution, detailed, sharp, 4k quality', 'weight': 1.0}
-            ],
-            'init_image': image_base64,
-            'init_image_mode': 'IMAGE_STRENGTH',
-            'image_strength': 0.2,  # Keep most of original
-            'width': min(target_width, 1024),  # SDXL max
-            'height': min(target_height, 1024),
-            'cfg_scale': 7,
-            'samples': 1,
-            'steps': 25
-        })
-    )
+    # Choose model based on image size
+    if total_pixels <= max_fast_pixels:
+        # Use Fast Upscale for smaller images (simpler API, no prompt needed)
+        response = bedrock.invoke_model(
+            modelId='us.stability.stable-fast-upscale-v1:0',
+            body=json.dumps({
+                'image': image_base64,
+                'output_format': 'png'
+            })
+        )
+    else:
+        # Use Conservative Upscale for larger images (requires prompt)
+        response = bedrock.invoke_model(
+            modelId='us.stability.stable-conservative-upscale-v1:0',
+            body=json.dumps({
+                'image': image_base64,
+                'prompt': 'high resolution photograph, sharp details, clear image',
+                'creativity': 0.2,  # Lower = more faithful to original
+                'output_format': 'png'
+            })
+        )
 
     response_body = json.loads(response['body'].read())
-    result_base64 = response_body['artifacts'][0]['base64']
+    result_base64 = response_body['images'][0]
     result_data = base64.b64decode(result_base64)
 
     return Image.open(io.BytesIO(result_data))
@@ -439,7 +476,7 @@ def remove_background(photo_id):
 
 
 def _remove_bg_with_bedrock(image):
-    """Remove background using Stability AI via Bedrock"""
+    """Remove background using Stability AI Remove Background service via Bedrock"""
     bedrock = get_bedrock_client()
 
     # Convert image to base64
@@ -448,27 +485,17 @@ def _remove_bg_with_bedrock(image):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use image-to-image with masking prompt
+    # Use dedicated Remove Background model
     response = bedrock.invoke_model(
-        modelId='stability.stable-diffusion-xl-v1',
-        contentType='application/json',
-        accept='application/json',
+        modelId='us.stability.stable-image-remove-background-v1:0',
         body=json.dumps({
-            'text_prompts': [
-                {'text': 'subject only, transparent background, isolated object, no background', 'weight': 1.0},
-                {'text': 'background, scenery, environment', 'weight': -1.0}
-            ],
-            'init_image': image_base64,
-            'init_image_mode': 'IMAGE_STRENGTH',
-            'image_strength': 0.5,
-            'cfg_scale': 10,
-            'samples': 1,
-            'steps': 40
+            'image': image_base64,
+            'output_format': 'png'
         })
     )
 
     response_body = json.loads(response['body'].read())
-    result_base64 = response_body['artifacts'][0]['base64']
+    result_base64 = response_body['images'][0]
     result_data = base64.b64decode(result_base64)
 
     return Image.open(io.BytesIO(result_data))
@@ -511,20 +538,31 @@ def style_transfer(photo_id, style):
 
 
 def _style_transfer_with_bedrock(image, style):
-    """Apply artistic style using Stability AI via Bedrock"""
+    """Apply artistic style using Stability AI Creative Upscale with style presets"""
     bedrock = get_bedrock_client()
 
-    # Style prompts
-    style_prompts = {
-        'watercolor': 'watercolor painting style, soft colors, artistic brush strokes',
-        'oil_painting': 'oil painting style, thick brush strokes, rich colors, classical art',
-        'sketch': 'pencil sketch style, black and white, detailed line drawing',
-        'anime': 'anime style, vibrant colors, clean lines, Japanese animation',
-        'pop_art': 'pop art style, bold colors, comic book style, Andy Warhol inspired',
-        'impressionist': 'impressionist painting style, soft brush strokes, light and color, Monet inspired'
+    # Map our style names to Stability AI style_preset values
+    style_preset_map = {
+        'watercolor': 'analog-film',  # Soft, artistic look
+        'oil_painting': 'enhance',  # Rich, detailed
+        'sketch': 'line-art',  # Line drawing style
+        'anime': 'anime',  # Anime style
+        'pop_art': 'comic-book',  # Bold, comic style
+        'impressionist': 'digital-art'  # Artistic digital style
     }
 
-    prompt = style_prompts.get(style, 'artistic style')
+    # Style prompts for additional guidance
+    style_prompts = {
+        'watercolor': 'watercolor painting, soft colors, artistic brush strokes, dreamy',
+        'oil_painting': 'oil painting, thick brush strokes, rich colors, classical fine art',
+        'sketch': 'pencil sketch, detailed line drawing, artistic illustration',
+        'anime': 'anime art style, vibrant colors, clean lines, Japanese animation style',
+        'pop_art': 'pop art, bold colors, comic book style, graphic design',
+        'impressionist': 'impressionist painting, soft brush strokes, light and color, artistic'
+    }
+
+    style_preset = style_preset_map.get(style, 'digital-art')
+    prompt = style_prompts.get(style, 'artistic style transformation')
 
     # Convert image to base64
     buffer = io.BytesIO()
@@ -532,25 +570,20 @@ def _style_transfer_with_bedrock(image, style):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
+    # Use Creative Upscale with style preset
     response = bedrock.invoke_model(
-        modelId='stability.stable-diffusion-xl-v1',
-        contentType='application/json',
-        accept='application/json',
+        modelId='us.stability.stable-creative-upscale-v1:0',
         body=json.dumps({
-            'text_prompts': [
-                {'text': prompt, 'weight': 1.0}
-            ],
-            'init_image': image_base64,
-            'init_image_mode': 'IMAGE_STRENGTH',
-            'image_strength': 0.6,  # More style transformation
-            'cfg_scale': 12,
-            'samples': 1,
-            'steps': 50
+            'image': image_base64,
+            'prompt': prompt,
+            'style_preset': style_preset,
+            'creativity': 0.5,  # Higher creativity for more style transformation
+            'output_format': 'png'
         })
     )
 
     response_body = json.loads(response['body'].read())
-    result_base64 = response_body['artifacts'][0]['base64']
+    result_base64 = response_body['images'][0]
     result_data = base64.b64decode(result_base64)
 
     return Image.open(io.BytesIO(result_data))
