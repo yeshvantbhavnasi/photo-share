@@ -145,8 +145,8 @@ def save_edited_photo(
     base_name = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
     new_filename = f"{base_name}_{edit_operation}{extension}"
 
-    # S3 paths
-    s3_key = f"edited/{user_id}/{album_id}/{new_photo_id}{extension}"
+    # S3 paths - use photos/ path so CloudFront can serve them
+    s3_key = f"photos/{user_id}/{album_id}/{new_photo_id}{extension}"
     thumbnail_key = f"thumbnails/{user_id}/{album_id}/{new_photo_id}_thumb{extension}"
 
     # Upload edited image
