@@ -145,8 +145,23 @@ class PhotoUploader:
         return album_id
 
     def save_photo_metadata(self, photo_data: dict):
-        """Save photo metadata to DynamoDB."""
+        """Save photo metadata to DynamoDB.
+
+        Writes TWO items for each photo:
+        1. Album item: pk=ALBUM#id, sk=PHOTO#id (for album queries)
+        2. Timeline item: pk=USER#id, sk=DATE#timestamp#PHOTO#id (for date queries)
+        """
+        # Item 1: Album item (for querying photos by album)
         self.photos_table.put_item(Item=photo_data)
+
+        # Item 2: Timeline item (for querying photos by date)
+        upload_date = photo_data.get('uploadDate', '')[:10]  # Get YYYY-MM-DD
+        timeline_item = {
+            **photo_data,
+            'pk': f"USER#{photo_data['userId']}",
+            'sk': f"DATE#{upload_date}#PHOTO#{photo_data['photoId']}",
+        }
+        self.photos_table.put_item(Item=timeline_item)
 
     def update_album_count(self, album_id: str, count: int):
         """Update the photo count for an album."""
@@ -185,10 +200,13 @@ class PhotoUploader:
             print(f"Error: Path is not a directory: {folder_path}")
             return {'success': False, 'error': 'Not a directory'}
 
-        # Find all image files
+        # Find all image files (skip hidden/metadata files like ._ files)
         image_files = []
         for file in folder_path.iterdir():
             if file.is_file() and file.suffix.lower() in SUPPORTED_FORMATS:
+                # Skip macOS metadata files (._*) and other hidden files (.*)
+                if file.name.startswith('.'):
+                    continue
                 image_files.append(file)
 
         if not image_files:

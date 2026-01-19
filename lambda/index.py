@@ -34,6 +34,22 @@ def cors_response(status_code, body):
     }
 
 
+def get_first_valid_photo(album_id):
+    """Get the first valid (non-metadata) photo from an album for cover"""
+    response = photos_table.query(
+        KeyConditionExpression=Key('pk').eq(f'ALBUM#{album_id}'),
+        Limit=20  # Check first 20 to find a valid one
+    )
+    for item in response.get('Items', []):
+        if item['sk'].startswith('PHOTO#'):
+            filename = item.get('filename', '')
+            if not filename.startswith('.'):
+                thumbnail_key = item.get('thumbnailKey')
+                if thumbnail_key:
+                    return f"https://{CLOUDFRONT_DOMAIN}/{thumbnail_key}"
+    return None
+
+
 def get_albums(user_id='default-user'):
     """Get all albums for a user"""
     response = photos_table.query(
@@ -43,15 +59,21 @@ def get_albums(user_id='default-user'):
     albums = []
     for item in response.get('Items', []):
         album_id = item['sk'].replace('ALBUM#', '')
-        # Get cover photo URL if exists
-        cover_photo = None
-        if item.get('coverPhotoKey'):
-            cover_photo = f"https://{CLOUDFRONT_DOMAIN}/{item.get('coverPhotoKey')}"
+
+        # Always get first valid (non-metadata) photo as cover
+        cover_photo = get_first_valid_photo(album_id)
+
+        # Count actual valid photos (exclude metadata files)
+        photo_response = photos_table.query(
+            KeyConditionExpression=Key('pk').eq(f'ALBUM#{album_id}')
+        )
+        valid_count = sum(1 for p in photo_response.get('Items', [])
+                        if p['sk'].startswith('PHOTO#') and not p.get('filename', '').startswith('.'))
 
         albums.append({
             'id': album_id,
             'name': item.get('name', 'Untitled Album'),
-            'photoCount': item.get('photoCount', 0),
+            'photoCount': valid_count,
             'coverPhoto': cover_photo,
             'createdAt': item.get('createdAt')
         })
@@ -81,10 +103,14 @@ def get_album_photos(album_id, user_id='default-user'):
     photos = []
     for item in response.get('Items', []):
         if item['sk'].startswith('PHOTO#'):
+            filename = item.get('filename', '')
+            # Skip macOS metadata files (._*) and other hidden files
+            if filename.startswith('.'):
+                continue
             photo_id = item['sk'].replace('PHOTO#', '')
             photos.append({
                 'id': photo_id,
-                'filename': item.get('filename'),
+                'filename': filename,
                 'url': f"https://{CLOUDFRONT_DOMAIN}/{item.get('s3Key')}",
                 'thumbnailUrl': f"https://{CLOUDFRONT_DOMAIN}/{item.get('thumbnailKey')}" if item.get('thumbnailKey') else None,
                 'uploadDate': item.get('uploadDate'),
@@ -101,6 +127,74 @@ def get_album_photos(album_id, user_id='default-user'):
         'photoCount': len(photos),
         'photos': photos
     }
+
+
+def get_photos_by_date(user_id='default-user', start_date=None, end_date=None, limit=100):
+    """Get photos ordered by date using DATE# items (no GSI needed).
+
+    Query pattern: pk=USER#userId, sk begins_with DATE#
+    Sort key format: DATE#YYYY-MM-DD#PHOTO#photoId
+    """
+    try:
+        # Build key condition for main table (no GSI)
+        pk = f'USER#{user_id}'
+
+        if start_date and end_date:
+            # Query between two dates
+            key_condition = Key('pk').eq(pk) & Key('sk').between(
+                f'DATE#{start_date}',
+                f'DATE#{end_date}~'  # ~ is after all valid chars
+            )
+        elif start_date:
+            # Query from start_date onwards
+            key_condition = Key('pk').eq(pk) & Key('sk').gte(f'DATE#{start_date}')
+        elif end_date:
+            # Query up to end_date
+            key_condition = Key('pk').eq(pk) & Key('sk').between('DATE#', f'DATE#{end_date}~')
+        else:
+            # Query all DATE# items
+            key_condition = Key('pk').eq(pk) & Key('sk').begins_with('DATE#')
+
+        response = photos_table.query(
+            KeyConditionExpression=key_condition,
+            ScanIndexForward=False,  # Descending order (newest first)
+            Limit=limit
+        )
+
+        photos = []
+        for item in response.get('Items', []):
+            filename = item.get('filename', '')
+            # Skip macOS metadata files
+            if filename.startswith('.'):
+                continue
+
+            photo_id = item.get('photoId')
+            photos.append({
+                'id': photo_id,
+                'albumId': item.get('albumId'),
+                'filename': filename,
+                'url': f"https://{CLOUDFRONT_DOMAIN}/{item.get('s3Key')}",
+                'thumbnailUrl': f"https://{CLOUDFRONT_DOMAIN}/{item.get('thumbnailKey')}" if item.get('thumbnailKey') else None,
+                'uploadDate': item.get('uploadDate'),
+                'size': item.get('size'),
+                'contentType': item.get('contentType')
+            })
+
+        # Group by date for timeline view
+        from collections import defaultdict
+        by_date = defaultdict(list)
+        for photo in photos:
+            date_str = photo.get('uploadDate', '')[:10]  # Get YYYY-MM-DD
+            by_date[date_str].append(photo)
+
+        return {
+            'photos': photos,
+            'byDate': dict(by_date),
+            'totalCount': len(photos),
+            'hasMore': 'LastEvaluatedKey' in response
+        }
+    except Exception as e:
+        return {'error': str(e), 'photos': [], 'byDate': {}, 'totalCount': 0}
 
 
 def validate_share_link(token):
@@ -180,6 +274,18 @@ def lambda_handler(event, context):
                 album_data = get_album_photos(album_id)
                 return cors_response(200, album_data)
             return cors_response(400, {'error': 'Missing album id'})
+
+        # Route: GET /timeline or /photos?startDate=X&endDate=Y
+        if path == '/timeline' or path == '/photos' or path == '/api/timeline' or path == '/api/photos':
+            start_date = query_params.get('startDate')
+            end_date = query_params.get('endDate')
+            limit = int(query_params.get('limit', 100))
+            timeline_data = get_photos_by_date(
+                start_date=start_date,
+                end_date=end_date,
+                limit=min(limit, 500)  # Cap at 500
+            )
+            return cors_response(200, timeline_data)
 
         # Route: GET /share/{token} or /share?token=xxx
         if path.startswith('/share') or path.startswith('/api/share'):

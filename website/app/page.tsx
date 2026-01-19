@@ -5,34 +5,26 @@ import Link from 'next/link';
 import Gallery from '@/components/Gallery';
 import AlbumCard from '@/components/AlbumCard';
 import { PhotoItem, AlbumItem } from '@/lib/types';
-
-// Demo data for static export - in production, this would come from API
-const DEMO_ALBUMS: AlbumItem[] = [
-  {
-    id: 'demo-album-1',
-    name: 'Welcome Album',
-    description: 'Your first album. Upload some photos to get started!',
-    photoCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-];
+import { apiClient } from '@/lib/api-client';
 
 export default function HomePage() {
-  const [albums, setAlbums] = useState<AlbumItem[]>(DEMO_ALBUMS);
+  const [albums, setAlbums] = useState<AlbumItem[]>([]);
   const [recentPhotos, setRecentPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Try to load albums from localStorage for demo purposes
-    const storedAlbums = localStorage.getItem('photo-share-albums');
-    if (storedAlbums) {
+    // Load albums from API
+    const loadAlbums = async () => {
       try {
-        setAlbums(JSON.parse(storedAlbums));
-      } catch {
-        // Use demo data if parsing fails
+        const data = await apiClient.albums.list();
+        setAlbums(data);
+      } catch (error) {
+        console.error('Failed to load albums:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+    loadAlbums();
   }, []);
 
   return (
@@ -40,7 +32,7 @@ export default function HomePage() {
       {/* Hero Section */}
       <section className="text-center py-12">
         <h1 className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
-          Share Memories with Family
+          Bhavnasi Share
         </h1>
         <p className="text-lg text-slate-600 dark:text-slate-300 max-w-2xl mx-auto mb-8">
           Upload your photos, organize them into albums, and share them with family and friends

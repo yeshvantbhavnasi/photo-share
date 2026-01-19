@@ -96,7 +96,7 @@ export default function SharedAlbumContent() {
       )}
 
       <div className="mt-12 pt-8 border-t border-slate-200 dark:border-slate-700 text-center">
-        <p className="text-sm text-slate-500 dark:text-slate-400">Shared via Family Photos</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Shared via Bhavnasi Share</p>
       </div>
     </div>
   );
