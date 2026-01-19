@@ -88,7 +88,10 @@ def hide_photo(photo_id, user_id='default-user'):
                     'pk': item['pk'],
                     'sk': item['sk']
                 },
-                UpdateExpression='SET hidden = :hidden, hiddenAt = :hiddenAt',
+                UpdateExpression='SET #hidden = :hidden, hiddenAt = :hiddenAt',
+                ExpressionAttributeNames={
+                    '#hidden': 'hidden'
+                },
                 ExpressionAttributeValues={
                     ':hidden': True,
                     ':hiddenAt': datetime.utcnow().isoformat() + 'Z'
@@ -108,7 +111,10 @@ def hide_photo(photo_id, user_id='default-user'):
                     'pk': item['pk'],
                     'sk': item['sk']
                 },
-                UpdateExpression='SET hidden = :hidden, hiddenAt = :hiddenAt',
+                UpdateExpression='SET #hidden = :hidden, hiddenAt = :hiddenAt',
+                ExpressionAttributeNames={
+                    '#hidden': 'hidden'
+                },
                 ExpressionAttributeValues={
                     ':hidden': True,
                     ':hiddenAt': datetime.utcnow().isoformat() + 'Z'

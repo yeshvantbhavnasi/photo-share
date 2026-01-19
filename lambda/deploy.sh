@@ -7,7 +7,7 @@ REGION="us-east-1"
 PHOTOS_TABLE="PhotosMetadata"
 SHARE_LINKS_TABLE="ShareLinks"
 CLOUDFRONT_DOMAIN="d1nf5k4wr11svj.cloudfront.net"
-PHOTOS_BUCKET="bhavnasi-family-photos"
+PHOTOS_BUCKET="yeshvant-photos-storage-2026"
 
 echo "Deploying Photo Share API Lambda..."
 
@@ -85,7 +85,7 @@ EOF
         "s3:GetObject",
         "s3:PutObject"
       ],
-      "Resource": "arn:aws:s3:::bhavnasi-family-photos/*"
+      "Resource": "arn:aws:s3:::yeshvant-photos-storage-2026/*"
     }
   ]
 }
