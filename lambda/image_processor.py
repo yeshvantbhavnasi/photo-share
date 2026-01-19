@@ -564,36 +564,39 @@ def style_transfer(photo_id, style):
 
 def _style_transfer_with_bedrock(image, style):
     """Apply artistic style using Stability AI Creative Upscale with style presets"""
+    import time
     bedrock = get_bedrock_client()
 
     # Map our style names to Stability AI style_preset values
+    # Valid presets: 3d-model, analog-film, anime, cinematic, comic-book, digital-art,
+    # enhance, fantasy-art, isometric, line-art, low-poly, neon-punk, photographic, pixel-art
     style_preset_map = {
-        'watercolor': 'analog-film',  # Soft, artistic look
-        'oil_painting': 'enhance',  # Rich, detailed
-        'sketch': 'line-art',  # Line drawing style
-        'anime': 'anime',  # Anime style
-        'pop_art': 'comic-book',  # Bold, comic style
-        'impressionist': 'digital-art'  # Artistic digital style
+        'watercolor': 'analog-film',
+        'oil_painting': 'cinematic',
+        'sketch': 'line-art',
+        'anime': 'anime',
+        'pop_art': 'comic-book',
+        'impressionist': 'fantasy-art'
     }
 
     # Style prompts for additional guidance
     style_prompts = {
-        'watercolor': 'watercolor painting, soft colors, artistic brush strokes, dreamy',
-        'oil_painting': 'oil painting, thick brush strokes, rich colors, classical fine art',
-        'sketch': 'pencil sketch, detailed line drawing, artistic illustration',
-        'anime': 'anime art style, vibrant colors, clean lines, Japanese animation style',
-        'pop_art': 'pop art, bold colors, comic book style, graphic design',
-        'impressionist': 'impressionist painting, soft brush strokes, light and color, artistic'
+        'watercolor': 'watercolor painting, soft colors, flowing brush strokes',
+        'oil_painting': 'oil painting, rich colors, dramatic lighting, fine art',
+        'sketch': 'pencil sketch, black and white, detailed line drawing',
+        'anime': 'anime style, vibrant colors, clean lines',
+        'pop_art': 'pop art, bold colors, comic book style',
+        'impressionist': 'impressionist art, soft brush strokes, dreamy'
     }
 
     style_preset = style_preset_map.get(style, 'digital-art')
-    prompt = style_prompts.get(style, 'artistic style transformation')
+    prompt = style_prompts.get(style, 'artistic style')
 
     # Resize smaller for faster processing
-    image = _resize_for_bedrock(image, max_pixels=500000)
-    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}")
+    image = _resize_for_bedrock(image, max_pixels=400000)
+    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}, style: {style_preset}")
 
-    # Convert to RGB if needed (for JPEG compatibility)
+    # Convert to RGB if needed
     if image.mode == 'RGBA':
         bg = Image.new('RGB', image.size, (255, 255, 255))
         bg.paste(image, mask=image.split()[3])
@@ -603,27 +606,38 @@ def _style_transfer_with_bedrock(image, style):
 
     # Convert image to base64 as JPEG
     buffer = io.BytesIO()
-    image.save(buffer, format='JPEG', quality=90)
+    image.save(buffer, format='JPEG', quality=85)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use Creative Upscale with style preset
-    response = bedrock.invoke_model(
-        modelId='us.stability.stable-creative-upscale-v1:0',
-        body=json.dumps({
-            'image': image_base64,
-            'prompt': prompt,
-            'style_preset': style_preset,
-            'creativity': 0.5,  # Higher creativity for more style transformation
-            'output_format': 'jpeg'
-        })
-    )
+    # Retry up to 2 times on transient errors
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = bedrock.invoke_model(
+                modelId='us.stability.stable-creative-upscale-v1:0',
+                body=json.dumps({
+                    'image': image_base64,
+                    'prompt': prompt,
+                    'style_preset': style_preset,
+                    'creativity': 0.45,
+                    'output_format': 'jpeg'
+                })
+            )
 
-    response_body = json.loads(response['body'].read())
-    result_base64 = response_body['images'][0]
-    result_data = base64.b64decode(result_base64)
+            response_body = json.loads(response['body'].read())
+            result_base64 = response_body['images'][0]
+            result_data = base64.b64decode(result_base64)
+            print(f"Style transfer succeeded on attempt {attempt + 1}")
+            return Image.open(io.BytesIO(result_data))
 
-    return Image.open(io.BytesIO(result_data))
+        except Exception as e:
+            last_error = e
+            print(f"Style transfer attempt {attempt + 1} failed: {e}")
+            if attempt < 1:
+                time.sleep(1)  # Brief pause before retry
+
+    raise last_error
 
 
 def process_image_edit(photo_id, operation, parameters=None):
