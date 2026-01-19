@@ -325,6 +325,7 @@ def _enhance_with_bedrock(image, params):
     Uses Creative Upscale with enhancement prompt for AI-powered image enhancement.
     Uses JPEG to avoid response size limits.
     """
+    import time
     bedrock = get_bedrock_client()
 
     # Resize smaller for faster processing within API Gateway timeout
@@ -345,25 +346,41 @@ def _enhance_with_bedrock(image, params):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use Creative Upscale with enhancement prompt
-    response = bedrock.invoke_model(
-        modelId='us.stability.stable-creative-upscale-v1:0',
-        body=json.dumps({
-            'image': image_base64,
-            'prompt': 'enhance photo quality, improve lighting, vivid colors, sharp details, professional photography',
-            'negative_prompt': 'blurry, low quality, distorted, overexposed, underexposed',
-            'creativity': 0.2,  # Lower = keep more of original
-            'output_format': 'jpeg'
-        })
-    )
+    # Retry up to 3 times
+    max_retries = 3
+    last_error = None
 
-    response_body = json.loads(response['body'].read())
+    for attempt in range(max_retries):
+        try:
+            response = bedrock.invoke_model(
+                modelId='us.stability.stable-creative-upscale-v1:0',
+                body=json.dumps({
+                    'image': image_base64,
+                    'prompt': 'enhance photo quality, improve lighting, vivid colors, sharp details, professional photography',
+                    'negative_prompt': 'blurry, low quality, distorted, overexposed, underexposed',
+                    'creativity': 0.2,
+                    'output_format': 'jpeg'
+                })
+            )
 
-    # Decode result image (new API uses 'images' array)
-    result_base64 = response_body['images'][0]
-    result_data = base64.b64decode(result_base64)
+            response_body = json.loads(response['body'].read())
+            result_base64 = response_body['images'][0]
+            result_data = base64.b64decode(result_base64)
+            print(f"Enhance succeeded on attempt {attempt + 1}")
+            return Image.open(io.BytesIO(result_data))
 
-    return Image.open(io.BytesIO(result_data))
+        except Exception as e:
+            last_error = e
+            print(f"Enhance attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+
+    # All retries failed
+    error_msg = str(last_error)
+    if "ModelErrorException" in error_msg:
+        raise ValueError("Enhance service temporarily unavailable. Please try again.")
+    else:
+        raise ValueError(f"Enhance failed after {max_retries} attempts. Please try again.")
 
 
 def upscale_image(photo_id, scale_factor=2):
@@ -421,6 +438,7 @@ def _upscale_with_bedrock(image, scale_factor):
     Resizes input to fit within limit for faster processing.
     Uses JPEG output to avoid response size limits.
     """
+    import time
     bedrock = get_bedrock_client()
 
     # Resize to smaller size to keep response under 16MB limit
@@ -441,20 +459,38 @@ def _upscale_with_bedrock(image, scale_factor):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use Fast Upscale with JPEG output (smaller response size)
-    response = bedrock.invoke_model(
-        modelId='us.stability.stable-fast-upscale-v1:0',
-        body=json.dumps({
-            'image': image_base64,
-            'output_format': 'jpeg'
-        })
-    )
+    # Retry up to 3 times
+    max_retries = 3
+    last_error = None
 
-    response_body = json.loads(response['body'].read())
-    result_base64 = response_body['images'][0]
-    result_data = base64.b64decode(result_base64)
+    for attempt in range(max_retries):
+        try:
+            response = bedrock.invoke_model(
+                modelId='us.stability.stable-fast-upscale-v1:0',
+                body=json.dumps({
+                    'image': image_base64,
+                    'output_format': 'jpeg'
+                })
+            )
 
-    return Image.open(io.BytesIO(result_data))
+            response_body = json.loads(response['body'].read())
+            result_base64 = response_body['images'][0]
+            result_data = base64.b64decode(result_base64)
+            print(f"Upscale succeeded on attempt {attempt + 1}")
+            return Image.open(io.BytesIO(result_data))
+
+        except Exception as e:
+            last_error = e
+            print(f"Upscale attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+
+    # All retries failed
+    error_msg = str(last_error)
+    if "ModelErrorException" in error_msg:
+        raise ValueError("Upscale service temporarily unavailable. Please try again.")
+    else:
+        raise ValueError(f"Upscale failed after {max_retries} attempts. Please try again.")
 
 
 def remove_background(photo_id):
@@ -490,6 +526,7 @@ def remove_background(photo_id):
 
 def _remove_bg_with_bedrock(image):
     """Remove background using Stability AI Remove Background service via Bedrock"""
+    import time
     bedrock = get_bedrock_client()
 
     # Resize smaller for faster processing
@@ -510,20 +547,38 @@ def _remove_bg_with_bedrock(image):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Use dedicated Remove Background model (PNG output for transparency)
-    response = bedrock.invoke_model(
-        modelId='us.stability.stable-image-remove-background-v1:0',
-        body=json.dumps({
-            'image': image_base64,
-            'output_format': 'png'
-        })
-    )
+    # Retry up to 3 times
+    max_retries = 3
+    last_error = None
 
-    response_body = json.loads(response['body'].read())
-    result_base64 = response_body['images'][0]
-    result_data = base64.b64decode(result_base64)
+    for attempt in range(max_retries):
+        try:
+            response = bedrock.invoke_model(
+                modelId='us.stability.stable-image-remove-background-v1:0',
+                body=json.dumps({
+                    'image': image_base64,
+                    'output_format': 'png'
+                })
+            )
 
-    return Image.open(io.BytesIO(result_data))
+            response_body = json.loads(response['body'].read())
+            result_base64 = response_body['images'][0]
+            result_data = base64.b64decode(result_base64)
+            print(f"Remove background succeeded on attempt {attempt + 1}")
+            return Image.open(io.BytesIO(result_data))
+
+        except Exception as e:
+            last_error = e
+            print(f"Remove background attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+
+    # All retries failed
+    error_msg = str(last_error)
+    if "ModelErrorException" in error_msg:
+        raise ValueError("Background removal service temporarily unavailable. Please try again.")
+    else:
+        raise ValueError(f"Background removal failed after {max_retries} attempts. Please try again.")
 
 
 def style_transfer(photo_id, style):
@@ -610,9 +665,11 @@ def _style_transfer_with_bedrock(image, style):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Retry up to 2 times on transient errors
+    # Retry up to 3 times on transient errors
+    max_retries = 3
     last_error = None
-    for attempt in range(2):
+
+    for attempt in range(max_retries):
         try:
             response = bedrock.invoke_model(
                 modelId='us.stability.stable-creative-upscale-v1:0',
@@ -633,11 +690,20 @@ def _style_transfer_with_bedrock(image, style):
 
         except Exception as e:
             last_error = e
-            print(f"Style transfer attempt {attempt + 1} failed: {e}")
-            if attempt < 1:
-                time.sleep(1)  # Brief pause before retry
+            print(f"Style transfer attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1.5)  # Brief pause before retry
 
-    raise last_error
+    # All retries failed - throw user-friendly error
+    error_msg = str(last_error)
+    if "ModelErrorException" in error_msg:
+        raise ValueError(f"Style transfer service temporarily unavailable. Please try again in a moment.")
+    elif "ValidationException" in error_msg:
+        raise ValueError(f"Image could not be processed. Try a different image or style.")
+    elif "AccessDeniedException" in error_msg:
+        raise ValueError(f"Style transfer service not configured. Contact administrator.")
+    else:
+        raise ValueError(f"Style transfer failed after {max_retries} attempts. Please try again.")
 
 
 def process_image_edit(photo_id, operation, parameters=None):
