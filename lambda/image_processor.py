@@ -305,6 +305,20 @@ def _enhance_with_pillow(image, params):
     return image
 
 
+def _resize_for_bedrock(image, max_pixels=1000000):
+    """Resize image if too large for fast Bedrock processing.
+
+    Keeps aspect ratio, targets under max_pixels for faster API response.
+    """
+    total_pixels = image.width * image.height
+    if total_pixels > max_pixels:
+        scale = (max_pixels / total_pixels) ** 0.5
+        new_width = int(image.width * scale)
+        new_height = int(image.height * scale)
+        return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    return image
+
+
 def _enhance_with_bedrock(image, params):
     """Enhance image using Stability AI Creative Upscale via Bedrock
 
@@ -312,9 +326,13 @@ def _enhance_with_bedrock(image, params):
     """
     bedrock = get_bedrock_client()
 
+    # Resize if too large (for faster processing within API Gateway timeout)
+    image = _resize_for_bedrock(image, max_pixels=800000)
+    print(f"Image for Bedrock enhance: {image.width}x{image.height}")
+
     # Convert image to base64
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
+    image.save(buffer, format='PNG', optimize=True)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
@@ -388,54 +406,31 @@ def upscale_image(photo_id, scale_factor=2):
 
 
 def _upscale_with_bedrock(image, scale_factor):
-    """Upscale image using Stability AI Upscale services via Bedrock
+    """Upscale image using Stability AI Fast Upscale via Bedrock
 
-    - Fast Upscale: max 1,048,576 pixels (1MP), 4x upscale
-    - Conservative Upscale: max 9,437,184 pixels (~9MP), needs prompt
+    Fast Upscale: max 1,048,576 pixels (1MP), 4x upscale
+    Resizes input to fit within limit for faster processing.
     """
     bedrock = get_bedrock_client()
 
-    # Calculate current pixel count
-    total_pixels = image.width * image.height
-    max_fast_pixels = 1048576  # 1MP limit for Fast Upscale
-    max_conservative_pixels = 9437184  # ~9MP limit for Conservative Upscale
-
-    # If image is too large even for Conservative, resize it down first
-    if total_pixels > max_conservative_pixels:
-        # Calculate scale to fit within limit
-        scale = (max_conservative_pixels / total_pixels) ** 0.5
-        new_width = int(image.width * scale)
-        new_height = int(image.height * scale)
-        image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        total_pixels = new_width * new_height
+    # Resize to fit within Fast Upscale limit (1MP) for speed
+    image = _resize_for_bedrock(image, max_pixels=800000)
+    print(f"Image for Bedrock upscale: {image.width}x{image.height}")
 
     # Convert image to base64
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
+    image.save(buffer, format='PNG', optimize=True)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    # Choose model based on image size
-    if total_pixels <= max_fast_pixels:
-        # Use Fast Upscale for smaller images (simpler API, no prompt needed)
-        response = bedrock.invoke_model(
-            modelId='us.stability.stable-fast-upscale-v1:0',
-            body=json.dumps({
-                'image': image_base64,
-                'output_format': 'png'
-            })
-        )
-    else:
-        # Use Conservative Upscale for larger images (requires prompt)
-        response = bedrock.invoke_model(
-            modelId='us.stability.stable-conservative-upscale-v1:0',
-            body=json.dumps({
-                'image': image_base64,
-                'prompt': 'high resolution photograph, sharp details, clear image',
-                'creativity': 0.2,  # Lower = more faithful to original
-                'output_format': 'png'
-            })
-        )
+    # Use Fast Upscale (simpler API, no prompt needed)
+    response = bedrock.invoke_model(
+        modelId='us.stability.stable-fast-upscale-v1:0',
+        body=json.dumps({
+            'image': image_base64,
+            'output_format': 'png'
+        })
+    )
 
     response_body = json.loads(response['body'].read())
     result_base64 = response_body['images'][0]
@@ -479,9 +474,13 @@ def _remove_bg_with_bedrock(image):
     """Remove background using Stability AI Remove Background service via Bedrock"""
     bedrock = get_bedrock_client()
 
+    # Resize for faster processing
+    image = _resize_for_bedrock(image, max_pixels=800000)
+    print(f"Image for Bedrock remove_bg: {image.width}x{image.height}")
+
     # Convert image to base64
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
+    image.save(buffer, format='PNG', optimize=True)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
@@ -564,9 +563,13 @@ def _style_transfer_with_bedrock(image, style):
     style_preset = style_preset_map.get(style, 'digital-art')
     prompt = style_prompts.get(style, 'artistic style transformation')
 
+    # Resize for faster processing
+    image = _resize_for_bedrock(image, max_pixels=800000)
+    print(f"Image for Bedrock style_transfer: {image.width}x{image.height}")
+
     # Convert image to base64
     buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
+    image.save(buffer, format='PNG', optimize=True)
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
