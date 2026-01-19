@@ -7,6 +7,7 @@ REGION="us-east-1"
 PHOTOS_TABLE="PhotosMetadata"
 SHARE_LINKS_TABLE="ShareLinks"
 CLOUDFRONT_DOMAIN="d1nf5k4wr11svj.cloudfront.net"
+PHOTOS_BUCKET="bhavnasi-family-photos"
 
 echo "Deploying Photo Share API Lambda..."
 
@@ -125,10 +126,27 @@ fi
 
 echo "Using role: $ROLE_ARN"
 
-# Package Lambda function
+# Package Lambda function with dependencies
 echo "Packaging Lambda function..."
 cd "$(dirname "$0")"
-zip -j /tmp/lambda-function.zip index.py image_processor.py
+
+# Create a temporary directory for packaging
+PACKAGE_DIR="/tmp/lambda-package"
+rm -rf $PACKAGE_DIR
+mkdir -p $PACKAGE_DIR
+
+# Install Pillow for Lambda (Amazon Linux 2)
+echo "Installing Pillow for Lambda..."
+python3 -m pip install --platform manylinux2014_x86_64 --target $PACKAGE_DIR --implementation cp --python-version 3.11 --only-binary=:all: Pillow -q
+
+# Copy Lambda code
+cp index.py $PACKAGE_DIR/
+cp image_processor.py $PACKAGE_DIR/
+
+# Create deployment package
+cd $PACKAGE_DIR
+zip -r /tmp/lambda-function.zip . -q
+cd -
 
 # Check if function exists
 FUNCTION_EXISTS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/dev/null || echo "")
@@ -141,9 +159,9 @@ if [ -z "$FUNCTION_EXISTS" ]; then
         --role $ROLE_ARN \
         --handler index.lambda_handler \
         --zip-file fileb:///tmp/lambda-function.zip \
-        --timeout 30 \
-        --memory-size 256 \
-        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN}" \
+        --timeout 60 \
+        --memory-size 512 \
+        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
         --region $REGION
 else
     echo "Updating Lambda function..."
@@ -157,7 +175,7 @@ else
 
     aws lambda update-function-configuration \
         --function-name $FUNCTION_NAME \
-        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN}" \
+        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
         --region $REGION
 fi
 
