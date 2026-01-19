@@ -26,10 +26,16 @@ export default function Lightbox({
   onPhotoDeleted,
 }: LightboxProps) {
   const currentPhoto = photos[currentIndex];
-  const [isRotating, setIsRotating] = useState(false);
+  const [rotation, setRotation] = useState(0); // Current visual rotation (0, 90, 180, 270)
+  const [isSavingRotation, setIsSavingRotation] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Reset rotation when changing photos
+  useEffect(() => {
+    setRotation(0);
+  }, [currentIndex]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -73,20 +79,32 @@ export default function Lightbox({
     downloadPhoto(currentPhoto.url, filename);
   };
 
-  const handleRotate = async (angle: 90 | 270) => {
-    if (isRotating) return;
+  // Instant visual rotation (no server call)
+  const handleRotate = (direction: 'left' | 'right') => {
+    setRotation((prev) => {
+      const delta = direction === 'right' ? 90 : -90;
+      return (prev + delta + 360) % 360;
+    });
+  };
 
-    setIsRotating(true);
+  // Save rotated image to server (creates new photo)
+  const handleSaveRotation = async () => {
+    if (isSavingRotation || rotation === 0) return;
+
+    setIsSavingRotation(true);
     try {
-      const result = await apiClient.photos.rotate(currentPhoto.id, angle);
+      // Convert rotation to the format expected by API (90, 180, 270)
+      const apiAngle = rotation as 90 | 180 | 270;
+      const result = await apiClient.photos.rotate(currentPhoto.id, apiAngle);
       if (onPhotoAdded) {
         onPhotoAdded(result);
       }
+      setRotation(0); // Reset after saving
     } catch (error) {
-      console.error('Rotation failed:', error);
-      alert('Failed to rotate image. Please try again.');
+      console.error('Save rotation failed:', error);
+      alert('Failed to save rotated image. Please try again.');
     } finally {
-      setIsRotating(false);
+      setIsSavingRotation(false);
     }
   };
 
@@ -142,10 +160,9 @@ export default function Lightbox({
           <div className="flex items-center gap-2">
             {/* Rotate Left */}
             <button
-              onClick={() => handleRotate(270)}
-              disabled={isRotating}
-              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-              title="Rotate left (saves as new photo)"
+              onClick={() => handleRotate('left')}
+              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Rotate left"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
@@ -159,10 +176,9 @@ export default function Lightbox({
 
             {/* Rotate Right */}
             <button
-              onClick={() => handleRotate(90)}
-              disabled={isRotating}
-              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-              title="Rotate right (saves as new photo)"
+              onClick={() => handleRotate('right')}
+              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Rotate right"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
@@ -173,6 +189,30 @@ export default function Lightbox({
                 />
               </svg>
             </button>
+
+            {/* Save Rotation - only shows when rotated */}
+            {rotation !== 0 && (
+              <button
+                onClick={handleSaveRotation}
+                disabled={isSavingRotation}
+                className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                title="Save rotated image as new photo"
+              >
+                {isSavingRotation ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Save
+                  </>
+                )}
+              </button>
+            )}
 
             {/* Divider */}
             <div className="w-px h-6 bg-white/20 mx-1" />
@@ -282,7 +322,8 @@ export default function Lightbox({
               alt={currentPhoto.filename || `Photo ${currentPhoto.id}`}
               fill
               sizes="90vw"
-              className="object-contain"
+              className="object-contain transition-transform duration-200"
+              style={{ transform: `rotate(${rotation}deg)` }}
               priority
             />
           </div>
@@ -309,12 +350,12 @@ export default function Lightbox({
           )}
         </div>
 
-        {/* Loading indicator for rotation */}
-        {isRotating && (
+        {/* Loading indicator for saving rotation */}
+        {isSavingRotation && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
             <div className="flex flex-col items-center gap-3">
               <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
-              <span className="text-white text-sm">Rotating...</span>
+              <span className="text-white text-sm">Saving rotated image...</span>
             </div>
           </div>
         )}
