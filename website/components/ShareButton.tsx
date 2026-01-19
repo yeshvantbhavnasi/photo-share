@@ -2,9 +2,18 @@
 
 import { useState } from 'react';
 
+const API_ENDPOINT = 'https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod';
+
 interface ShareButtonProps {
   albumId: string;
   albumName: string;
+}
+
+interface ShareLinkResponse {
+  token: string;
+  albumId: string;
+  expiresAt?: string;
+  shareUrl: string;
 }
 
 export default function ShareButton({ albumId, albumName }: ShareButtonProps) {
@@ -13,41 +22,33 @@ export default function ShareButton({ albumId, albumName }: ShareButtonProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [expiresInDays, setExpiresInDays] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const generateShareLink = async () => {
     setIsLoading(true);
+    setError(null);
     try {
-      // Generate share link locally (for demo/static export)
-      const linkId = `${Date.now().toString(36)}${Math.random().toString(36).substr(2, 10)}`;
+      const response = await fetch(`${API_ENDPOINT}/share`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          albumId,
+          expiresInDays: expiresInDays || undefined,
+        }),
+      });
 
-      // Store share link data in localStorage
-      const storedLinks = localStorage.getItem('photo-share-links');
-      const links = storedLinks ? JSON.parse(storedLinks) : {};
-
-      const linkData: {
-        albumId: string;
-        albumName: string;
-        createdAt: string;
-        expiresAt?: string;
-      } = {
-        albumId,
-        albumName,
-        createdAt: new Date().toISOString(),
-      };
-
-      if (expiresInDays) {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + expiresInDays);
-        linkData.expiresAt = expiresAt.toISOString();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create share link');
       }
 
-      links[linkId] = linkData;
-      localStorage.setItem('photo-share-links', JSON.stringify(links));
-
-      const baseUrl = window.location.origin;
-      setShareLink(`${baseUrl}/shared/?token=${linkId}`);
-    } catch (error) {
-      console.error('Error creating share link:', error);
+      const data: ShareLinkResponse = await response.json();
+      setShareLink(data.shareUrl);
+    } catch (err) {
+      console.error('Error creating share link:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create share link');
     } finally {
       setIsLoading(false);
     }
@@ -60,8 +61,8 @@ export default function ShareButton({ albumId, albumName }: ShareButtonProps) {
       await navigator.clipboard.writeText(shareLink);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy:', error);
+    } catch (err) {
+      console.error('Failed to copy:', err);
     }
   };
 
@@ -104,6 +105,12 @@ export default function ShareButton({ albumId, albumName }: ShareButtonProps) {
                 </svg>
               </button>
             </div>
+
+            {error && (
+              <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-red-700 dark:text-red-300 text-sm">{error}</p>
+              </div>
+            )}
 
             {!shareLink ? (
               <>

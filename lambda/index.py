@@ -275,6 +275,37 @@ def get_photos_by_date(user_id='default-user', start_date=None, end_date=None, l
         return {'error': str(e), 'photos': [], 'byDate': {}, 'totalCount': 0}
 
 
+def create_share_link(album_id, user_id='default-user', expires_in_days=None):
+    """Create a new share link for an album"""
+    from datetime import datetime, timedelta
+    import uuid
+
+    # Generate a unique token
+    link_id = f"{uuid.uuid4().hex[:8]}-{uuid.uuid4().hex[:11]}-{uuid.uuid4().hex[:3]}"
+
+    item = {
+        'linkId': link_id,
+        'albumId': album_id,
+        'userId': user_id,
+        'createdBy': user_id,
+        'createdAt': datetime.utcnow().isoformat() + 'Z',
+        'accessCount': 0
+    }
+
+    if expires_in_days:
+        expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+        item['expiresAt'] = expires_at.isoformat() + 'Z'
+
+    share_links_table.put_item(Item=item)
+
+    return {
+        'token': link_id,
+        'albumId': album_id,
+        'expiresAt': item.get('expiresAt'),
+        'shareUrl': f"https://{CLOUDFRONT_DOMAIN}/shared/?token={link_id}"
+    }
+
+
 def validate_share_link(token):
     """Validate a share link and return album data if valid"""
     try:
@@ -364,6 +395,22 @@ def lambda_handler(event, context):
                 limit=min(limit, 500)  # Cap at 500
             )
             return cors_response(200, timeline_data)
+
+        # Route: POST /share - Create a new share link
+        if (path == '/share' or path == '/api/share') and http_method == 'POST':
+            try:
+                body = json.loads(event.get('body', '{}'))
+                album_id = body.get('albumId')
+                expires_in_days = body.get('expiresInDays')
+
+                if not album_id:
+                    return cors_response(400, {'error': 'Missing albumId'})
+
+                result = create_share_link(album_id, expires_in_days=expires_in_days)
+                return cors_response(200, result)
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Failed to create share link: {str(e)}'})
 
         # Route: GET /share/{token} or /share?token=xxx
         if path.startswith('/share') or path.startswith('/api/share'):
