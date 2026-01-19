@@ -100,15 +100,18 @@ export default function TimelinePage() {
   const handlePhotoAdded = (newPhoto: PhotoItem) => {
     if (timelineData) {
       const date = newPhoto.uploadDate?.substring(0, 10) || new Date().toISOString().substring(0, 10);
+      const newPhotos = [...timelineData.photos, newPhoto];
       setTimelineData({
         ...timelineData,
-        photos: [...timelineData.photos, newPhoto],
+        photos: newPhotos,
         byDate: {
           ...timelineData.byDate,
           [date]: [...(timelineData.byDate[date] || []), newPhoto],
         },
         totalCount: timelineData.totalCount + 1,
       });
+      // Navigate to the newly added photo
+      setSelectedIndex(newPhotos.length - 1);
     }
   };
 

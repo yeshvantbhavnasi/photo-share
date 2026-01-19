@@ -38,7 +38,12 @@ export default function Gallery({ photos: initialPhotos, showAlbumName }: Galler
   }, [photos.length]);
 
   const handlePhotoAdded = useCallback((newPhoto: PhotoItem) => {
-    setPhotos((prev) => [...prev, newPhoto]);
+    setPhotos((prev) => {
+      const newPhotos = [...prev, newPhoto];
+      // Navigate to the newly added photo
+      setCurrentIndex(newPhotos.length - 1);
+      return newPhotos;
+    });
   }, []);
 
   const handlePhotoDeleted = useCallback((photoId: string) => {
