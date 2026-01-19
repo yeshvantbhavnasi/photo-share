@@ -33,3 +33,33 @@ export interface UploadProgress {
   status: 'pending' | 'uploading' | 'generating-thumbnail' | 'complete' | 'error';
   error?: string;
 }
+
+// Image editing types
+export type EditOperation = 'rotate' | 'enhance' | 'upscale' | 'remove_bg' | 'style_transfer';
+
+export type StyleType = 'watercolor' | 'oil_painting' | 'sketch' | 'anime' | 'pop_art' | 'impressionist';
+
+export interface EditParameters {
+  angle?: 90 | 180 | 270;
+  scale?: 2 | 4;
+  style?: StyleType;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+}
+
+export interface EditedPhotoItem extends PhotoItem {
+  editOperation?: string;
+  originalPhotoId?: string;
+}
+
+export interface EditRequest {
+  photoId: string;
+  operation: EditOperation;
+  parameters?: EditParameters;
+}
+
+export interface EditResponse extends PhotoItem {
+  editOperation: string;
+  originalPhotoId: string;
+}

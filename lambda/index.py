@@ -28,26 +28,98 @@ def cors_response(status_code, body):
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS'
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
         },
         'body': json.dumps(body, cls=DecimalEncoder)
     }
 
 
+def is_photo_visible(item):
+    """Check if a photo should be visible (not hidden and not metadata)"""
+    if not item['sk'].startswith('PHOTO#'):
+        return False
+    filename = item.get('filename', '')
+    if filename.startswith('.'):
+        return False
+    if item.get('hidden', False):
+        return False
+    return True
+
+
 def get_first_valid_photo(album_id):
-    """Get the first valid (non-metadata) photo from an album for cover"""
+    """Get the first valid (non-metadata, non-hidden) photo from an album for cover"""
     response = photos_table.query(
         KeyConditionExpression=Key('pk').eq(f'ALBUM#{album_id}'),
         Limit=20  # Check first 20 to find a valid one
     )
     for item in response.get('Items', []):
-        if item['sk'].startswith('PHOTO#'):
-            filename = item.get('filename', '')
-            if not filename.startswith('.'):
-                thumbnail_key = item.get('thumbnailKey')
-                if thumbnail_key:
-                    return f"https://{CLOUDFRONT_DOMAIN}/{thumbnail_key}"
+        if is_photo_visible(item):
+            thumbnail_key = item.get('thumbnailKey')
+            if thumbnail_key:
+                return f"https://{CLOUDFRONT_DOMAIN}/{thumbnail_key}"
     return None
+
+
+def hide_photo(photo_id, user_id='default-user'):
+    """Hide a photo (soft delete) by marking it as hidden.
+
+    This finds the photo in DynamoDB and sets hidden=True.
+    The photo can be restored later by setting hidden=False.
+    """
+    from datetime import datetime
+
+    # Find the photo across all albums
+    response = photos_table.scan(
+        FilterExpression='photoId = :pid OR contains(sk, :photo_sk)',
+        ExpressionAttributeValues={
+            ':pid': photo_id,
+            ':photo_sk': f'PHOTO#{photo_id}'
+        }
+    )
+
+    items = response.get('Items', [])
+    hidden_count = 0
+
+    for item in items:
+        if item.get('sk', '').startswith('PHOTO#') or item.get('photoId') == photo_id:
+            # Update the photo item to mark as hidden
+            photos_table.update_item(
+                Key={
+                    'pk': item['pk'],
+                    'sk': item['sk']
+                },
+                UpdateExpression='SET hidden = :hidden, hiddenAt = :hiddenAt',
+                ExpressionAttributeValues={
+                    ':hidden': True,
+                    ':hiddenAt': datetime.utcnow().isoformat() + 'Z'
+                }
+            )
+            hidden_count += 1
+
+    # Also hide any DATE# entries for timeline view
+    date_response = photos_table.query(
+        KeyConditionExpression=Key('pk').eq(f'USER#{user_id}'),
+        FilterExpression=Attr('photoId').eq(photo_id)
+    )
+    for item in date_response.get('Items', []):
+        if item.get('sk', '').startswith('DATE#'):
+            photos_table.update_item(
+                Key={
+                    'pk': item['pk'],
+                    'sk': item['sk']
+                },
+                UpdateExpression='SET hidden = :hidden, hiddenAt = :hiddenAt',
+                ExpressionAttributeValues={
+                    ':hidden': True,
+                    ':hiddenAt': datetime.utcnow().isoformat() + 'Z'
+                }
+            )
+            hidden_count += 1
+
+    if hidden_count == 0:
+        raise ValueError(f'Photo not found: {photo_id}')
+
+    return {'photoId': photo_id, 'hidden': True, 'itemsUpdated': hidden_count}
 
 
 def get_albums(user_id='default-user'):
@@ -60,15 +132,14 @@ def get_albums(user_id='default-user'):
     for item in response.get('Items', []):
         album_id = item['sk'].replace('ALBUM#', '')
 
-        # Always get first valid (non-metadata) photo as cover
+        # Always get first valid (non-metadata, non-hidden) photo as cover
         cover_photo = get_first_valid_photo(album_id)
 
-        # Count actual valid photos (exclude metadata files)
+        # Count actual valid photos (exclude metadata files and hidden photos)
         photo_response = photos_table.query(
             KeyConditionExpression=Key('pk').eq(f'ALBUM#{album_id}')
         )
-        valid_count = sum(1 for p in photo_response.get('Items', [])
-                        if p['sk'].startswith('PHOTO#') and not p.get('filename', '').startswith('.'))
+        valid_count = sum(1 for p in photo_response.get('Items', []) if is_photo_visible(p))
 
         albums.append({
             'id': album_id,
@@ -84,7 +155,7 @@ def get_albums(user_id='default-user'):
 
 
 def get_album_photos(album_id, user_id='default-user'):
-    """Get all photos for an album"""
+    """Get all photos for an album (excludes hidden photos)"""
     # Get album metadata first
     album_response = photos_table.get_item(
         Key={
@@ -102,21 +173,19 @@ def get_album_photos(album_id, user_id='default-user'):
 
     photos = []
     for item in response.get('Items', []):
-        if item['sk'].startswith('PHOTO#'):
-            filename = item.get('filename', '')
-            # Skip macOS metadata files (._*) and other hidden files
-            if filename.startswith('.'):
-                continue
-            photo_id = item['sk'].replace('PHOTO#', '')
-            photos.append({
-                'id': photo_id,
-                'filename': filename,
-                'url': f"https://{CLOUDFRONT_DOMAIN}/{item.get('s3Key')}",
-                'thumbnailUrl': f"https://{CLOUDFRONT_DOMAIN}/{item.get('thumbnailKey')}" if item.get('thumbnailKey') else None,
-                'uploadDate': item.get('uploadDate'),
-                'size': item.get('size'),
-                'contentType': item.get('contentType')
-            })
+        # Use is_photo_visible to filter out hidden and metadata photos
+        if not is_photo_visible(item):
+            continue
+        photo_id = item['sk'].replace('PHOTO#', '')
+        photos.append({
+            'id': photo_id,
+            'filename': item.get('filename', ''),
+            'url': f"https://{CLOUDFRONT_DOMAIN}/{item.get('s3Key')}",
+            'thumbnailUrl': f"https://{CLOUDFRONT_DOMAIN}/{item.get('thumbnailKey')}" if item.get('thumbnailKey') else None,
+            'uploadDate': item.get('uploadDate'),
+            'size': item.get('size'),
+            'contentType': item.get('contentType')
+        })
 
     # Sort photos by uploadDate
     photos.sort(key=lambda x: x.get('uploadDate', ''))
@@ -134,6 +203,7 @@ def get_photos_by_date(user_id='default-user', start_date=None, end_date=None, l
 
     Query pattern: pk=USER#userId, sk begins_with DATE#
     Sort key format: DATE#YYYY-MM-DD#PHOTO#photoId
+    Excludes hidden photos.
     """
     try:
         # Build key condition for main table (no GSI)
@@ -164,8 +234,10 @@ def get_photos_by_date(user_id='default-user', start_date=None, end_date=None, l
         photos = []
         for item in response.get('Items', []):
             filename = item.get('filename', '')
-            # Skip macOS metadata files
+            # Skip macOS metadata files and hidden photos
             if filename.startswith('.'):
+                continue
+            if item.get('hidden', False):
                 continue
 
             photo_id = item.get('photoId')
@@ -302,6 +374,68 @@ def lambda_handler(event, context):
                     return cors_response(404, {'error': error})
                 return cors_response(200, album_data)
             return cors_response(400, {'error': 'Missing share token'})
+
+        # Route: POST /edit - Image editing operations
+        if (path == '/edit' or path == '/api/edit') and http_method == 'POST':
+            try:
+                from image_processor import process_image_edit
+
+                body = json.loads(event.get('body', '{}'))
+                photo_id = body.get('photoId')
+                operation = body.get('operation')
+                parameters = body.get('parameters', {})
+
+                if not photo_id:
+                    return cors_response(400, {'error': 'Missing photoId'})
+                if not operation:
+                    return cors_response(400, {'error': 'Missing operation'})
+
+                valid_operations = ['rotate', 'enhance', 'upscale', 'remove_bg', 'style_transfer']
+                if operation not in valid_operations:
+                    return cors_response(400, {
+                        'error': f'Invalid operation: {operation}',
+                        'validOperations': valid_operations
+                    })
+
+                result = process_image_edit(photo_id, operation, parameters)
+                return cors_response(200, result)
+
+            except ValueError as e:
+                return cors_response(400, {'error': str(e)})
+            except Exception as e:
+                return cors_response(500, {'error': f'Edit failed: {str(e)}'})
+
+        # Route: DELETE /photos/{id} - Hide (soft delete) a photo
+        if (path.startswith('/photos/') or path.startswith('/api/photos/')) and http_method == 'DELETE':
+            try:
+                photo_id = path.split('/')[-1]
+                if not photo_id or photo_id in ['photos', 'api']:
+                    return cors_response(400, {'error': 'Missing photo ID'})
+
+                result = hide_photo(photo_id)
+                return cors_response(200, result)
+
+            except ValueError as e:
+                return cors_response(404, {'error': str(e)})
+            except Exception as e:
+                return cors_response(500, {'error': f'Delete failed: {str(e)}'})
+
+        # Route: POST /photos/hide - Hide a photo (alternative to DELETE)
+        if (path == '/photos/hide' or path == '/api/photos/hide') and http_method == 'POST':
+            try:
+                body = json.loads(event.get('body', '{}'))
+                photo_id = body.get('photoId')
+
+                if not photo_id:
+                    return cors_response(400, {'error': 'Missing photoId'})
+
+                result = hide_photo(photo_id)
+                return cors_response(200, result)
+
+            except ValueError as e:
+                return cors_response(404, {'error': str(e)})
+            except Exception as e:
+                return cors_response(500, {'error': f'Hide failed: {str(e)}'})
 
         # Default: return 404
         return cors_response(404, {'error': 'Not found', 'path': path})

@@ -4,7 +4,7 @@
  * Fetches data from the Lambda API backed by DynamoDB.
  */
 
-import { PhotoItem, AlbumItem, ShareLinkItem } from './types';
+import { PhotoItem, AlbumItem, ShareLinkItem, EditOperation, EditParameters, EditResponse } from './types';
 
 // API Gateway endpoint
 const API_ENDPOINT = 'https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod';
@@ -125,6 +125,59 @@ export const apiClient = {
       // Placeholder for future implementation
       throw new Error('Photo upload via web is not yet implemented. Use the upload script.');
     },
+
+    edit: async (
+      photoId: string,
+      operation: EditOperation,
+      parameters: EditParameters = {}
+    ): Promise<EditResponse> => {
+      const response = await fetch(`${API_ENDPOINT}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photoId, operation, parameters }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Edit failed');
+      }
+      return response.json();
+    },
+
+    rotate: async (photoId: string, angle: 90 | 180 | 270): Promise<EditResponse> => {
+      return apiClient.photos.edit(photoId, 'rotate', { angle });
+    },
+
+    enhance: async (photoId: string): Promise<EditResponse> => {
+      return apiClient.photos.edit(photoId, 'enhance', {});
+    },
+
+    upscale: async (photoId: string, scale: 2 | 4 = 2): Promise<EditResponse> => {
+      return apiClient.photos.edit(photoId, 'upscale', { scale });
+    },
+
+    removeBackground: async (photoId: string): Promise<EditResponse> => {
+      return apiClient.photos.edit(photoId, 'remove_bg', {});
+    },
+
+    styleTransfer: async (photoId: string, style: EditParameters['style']): Promise<EditResponse> => {
+      return apiClient.photos.edit(photoId, 'style_transfer', { style });
+    },
+
+    hide: async (photoId: string): Promise<{ photoId: string; hidden: boolean }> => {
+      const response = await fetch(`${API_ENDPOINT}/photos/${encodeURIComponent(photoId)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to hide photo');
+      }
+      return response.json();
+    },
+
+    delete: async (photoId: string): Promise<{ photoId: string; hidden: boolean }> => {
+      // Alias for hide - soft delete
+      return apiClient.photos.hide(photoId);
+    },
   },
 
   share: {
@@ -186,6 +239,19 @@ export function getImageUrl(key: string): string {
     return key;
   }
   return `${CLOUDFRONT_URL}/${key}`;
+}
+
+// Download helper (frontend-only, no API call needed)
+export function downloadPhoto(url: string, filename: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.target = '_blank';
+  // Set crossOrigin to allow downloading from CloudFront
+  link.setAttribute('crossorigin', 'anonymous');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export default apiClient;

@@ -54,6 +54,8 @@ EOF
       "Action": [
         "dynamodb:GetItem",
         "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:PutItem",
         "dynamodb:UpdateItem"
       ],
       "Resource": [
@@ -71,6 +73,49 @@ EOF
         --policy-name DynamoDBAccess \
         --policy-document file:///tmp/dynamodb-policy.json
 
+    # Create S3 policy for image editing
+    cat > /tmp/s3-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::bhavnasi-family-photos/*"
+    }
+  ]
+}
+EOF
+
+    aws iam put-role-policy \
+        --role-name $ROLE_NAME \
+        --policy-name S3Access \
+        --policy-document file:///tmp/s3-policy.json
+
+    # Create Bedrock policy for AI features
+    cat > /tmp/bedrock-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel"
+      ],
+      "Resource": "arn:aws:bedrock:*::foundation-model/stability.*"
+    }
+  ]
+}
+EOF
+
+    aws iam put-role-policy \
+        --role-name $ROLE_NAME \
+        --policy-name BedrockAccess \
+        --policy-document file:///tmp/bedrock-policy.json
+
     # Wait for role to propagate
     echo "Waiting for IAM role to propagate..."
     sleep 10
@@ -83,7 +128,7 @@ echo "Using role: $ROLE_ARN"
 # Package Lambda function
 echo "Packaging Lambda function..."
 cd "$(dirname "$0")"
-zip -j /tmp/lambda-function.zip index.py
+zip -j /tmp/lambda-function.zip index.py image_processor.py
 
 # Check if function exists
 FUNCTION_EXISTS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/dev/null || echo "")
@@ -130,7 +175,7 @@ if [ -z "$API_ID" ]; then
     API_ID=$(aws apigatewayv2 create-api \
         --name $API_NAME \
         --protocol-type HTTP \
-        --cors-configuration "AllowOrigins=*,AllowMethods=GET,OPTIONS,AllowHeaders=Content-Type" \
+        --cors-configuration "AllowOrigins=*,AllowMethods=GET,POST,DELETE,OPTIONS,AllowHeaders=Content-Type" \
         --region $REGION \
         --query 'ApiId' \
         --output text)
@@ -145,10 +190,22 @@ if [ -z "$API_ID" ]; then
         --query 'IntegrationId' \
         --output text)
 
-    # Create default route
+    # Create routes for all HTTP methods
     aws apigatewayv2 create-route \
         --api-id $API_ID \
         --route-key 'GET /{proxy+}' \
+        --target "integrations/$INTEGRATION_ID" \
+        --region $REGION
+
+    aws apigatewayv2 create-route \
+        --api-id $API_ID \
+        --route-key 'POST /{proxy+}' \
+        --target "integrations/$INTEGRATION_ID" \
+        --region $REGION
+
+    aws apigatewayv2 create-route \
+        --api-id $API_ID \
+        --route-key 'DELETE /{proxy+}' \
         --target "integrations/$INTEGRATION_ID" \
         --region $REGION
 
