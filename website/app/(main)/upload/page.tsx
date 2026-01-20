@@ -162,7 +162,7 @@ export default function UploadPage() {
           {uploadCount > 0 && (
             <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">
               <button
-                onClick={() => router.push(`/albums/${selectedAlbum}/`)}
+                onClick={() => router.push(`/album/?id=${selectedAlbum}`)}
                 className="w-full py-2 px-4 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
               >
                 View Album
