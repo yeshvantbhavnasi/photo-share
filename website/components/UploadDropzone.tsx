@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { UploadProgress } from '@/lib/types';
+import { useAuth } from '@/lib/auth';
 
 const API_ENDPOINT = 'https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod';
 
@@ -15,6 +16,18 @@ interface UploadDropzoneProps {
 export default function UploadDropzone({ albumId, albumName, onUploadComplete }: UploadDropzoneProps) {
   const [uploads, setUploads] = useState<UploadProgress[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const { getIdToken } = useAuth();
+
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const token = await getIdToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  };
 
   const generateThumbnail = async (file: File): Promise<Blob> => {
     return new Promise((resolve, reject) => {
@@ -65,9 +78,10 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
       );
 
       // Get presigned URL from Lambda API
+      const authHeaders = await getAuthHeaders();
       const presignResponse = await fetch(`${API_ENDPOINT}/upload`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           albumId,
           albumName: albumName || 'Untitled Album',
@@ -118,7 +132,7 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
       // Save metadata to DynamoDB
       const completeResponse = await fetch(`${API_ENDPOINT}/upload/complete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           albumId,
           photoId,
