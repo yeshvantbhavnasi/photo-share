@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
+import JSZip from 'jszip';
 import { UploadProgress } from '@/lib/types';
 import { useAuth } from '@/lib/auth';
 
@@ -18,6 +19,8 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
   const [isUploading, setIsUploading] = useState(false);
   const { getIdToken } = useAuth();
 
+  const [extractingZip, setExtractingZip] = useState(false);
+
   const getAuthHeaders = async (): Promise<Record<string, string>> => {
     const token = await getIdToken();
     const headers: Record<string, string> = {
@@ -27,6 +30,48 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
       headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
+  };
+
+  const isImageFile = (filename: string): boolean => {
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'];
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+    return imageExtensions.includes(ext);
+  };
+
+  const extractImagesFromZip = async (zipFile: File): Promise<File[]> => {
+    const zip = await JSZip.loadAsync(zipFile);
+    const imageFiles: File[] = [];
+
+    const entries = Object.entries(zip.files);
+
+    for (const [path, zipEntry] of entries) {
+      // Skip directories and hidden files (like __MACOSX)
+      if (zipEntry.dir || path.startsWith('__MACOSX') || path.startsWith('.')) {
+        continue;
+      }
+
+      // Get the filename (without path)
+      const filename = path.split('/').pop() || path;
+
+      // Skip hidden files within folders
+      if (filename.startsWith('.')) {
+        continue;
+      }
+
+      // Check if it's an image
+      if (isImageFile(filename)) {
+        const blob = await zipEntry.async('blob');
+        const contentType = filename.toLowerCase().endsWith('.png') ? 'image/png' :
+                           filename.toLowerCase().endsWith('.gif') ? 'image/gif' :
+                           filename.toLowerCase().endsWith('.webp') ? 'image/webp' :
+                           'image/jpeg';
+
+        const file = new File([blob], filename, { type: contentType });
+        imageFiles.push(file);
+      }
+    }
+
+    return imageFiles;
   };
 
   const generateThumbnail = async (file: File): Promise<Blob> => {
@@ -168,7 +213,43 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
-      const newUploads: UploadProgress[] = acceptedFiles.map((file) => ({
+      // Process files - extract images from zip files
+      let filesToUpload: File[] = [];
+
+      setExtractingZip(true);
+
+      for (const file of acceptedFiles) {
+        if (file.name.toLowerCase().endsWith('.zip')) {
+          // Extract images from zip
+          try {
+            const extractedImages = await extractImagesFromZip(file);
+            filesToUpload = [...filesToUpload, ...extractedImages];
+          } catch (error) {
+            console.error('Failed to extract zip file:', error);
+            // Add the zip file as an error entry
+            setUploads((prev) => [
+              ...prev,
+              {
+                file,
+                progress: 0,
+                status: 'error' as const,
+                error: 'Failed to extract zip file',
+              },
+            ]);
+          }
+        } else {
+          // Regular image file
+          filesToUpload.push(file);
+        }
+      }
+
+      setExtractingZip(false);
+
+      if (filesToUpload.length === 0) {
+        return;
+      }
+
+      const newUploads: UploadProgress[] = filesToUpload.map((file) => ({
         file,
         progress: 0,
         status: 'pending' as const,
@@ -180,8 +261,8 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
       const startIndex = uploads.length;
 
       // Upload files sequentially to avoid overwhelming the browser
-      for (let i = 0; i < acceptedFiles.length; i++) {
-        await uploadFile(acceptedFiles[i], startIndex + i);
+      for (let i = 0; i < filesToUpload.length; i++) {
+        await uploadFile(filesToUpload[i], startIndex + i);
       }
 
       setIsUploading(false);
@@ -193,8 +274,10 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
     onDrop,
     accept: {
       'image/*': ['.jpeg', '.jpg', '.png', '.gif', '.webp', '.heic', '.heif'],
+      'application/zip': ['.zip'],
+      'application/x-zip-compressed': ['.zip'],
     },
-    disabled: isUploading,
+    disabled: isUploading || extractingZip,
   });
 
   const completedCount = uploads.filter((u) => u.status === 'complete').length;
@@ -207,7 +290,7 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
         className={`
           border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all
           ${isDragActive ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-300 dark:border-slate-600'}
-          ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-primary-400 hover:bg-slate-50 dark:hover:bg-slate-800'}
+          ${isUploading || extractingZip ? 'opacity-50 cursor-not-allowed' : 'hover:border-primary-400 hover:bg-slate-50 dark:hover:bg-slate-800'}
         `}
       >
         <input {...getInputProps()} />
@@ -224,15 +307,17 @@ export default function UploadDropzone({ albumId, albumName, onUploadComplete }:
             d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
           />
         </svg>
-        {isDragActive ? (
+        {extractingZip ? (
+          <p className="text-lg text-primary-600 dark:text-primary-400">Extracting zip file...</p>
+        ) : isDragActive ? (
           <p className="text-lg text-primary-600 dark:text-primary-400">Drop photos here...</p>
         ) : (
           <>
             <p className="text-lg text-slate-600 dark:text-slate-300">
-              Drag & drop photos here, or click to select
+              Drag & drop photos or a ZIP file here, or click to select
             </p>
             <p className="text-sm text-slate-400 mt-2">
-              Supports JPEG, PNG, GIF, WebP, HEIC
+              Supports JPEG, PNG, GIF, WebP, HEIC, and ZIP files
             </p>
           </>
         )}
