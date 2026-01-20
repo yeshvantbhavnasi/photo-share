@@ -1,0 +1,137 @@
+name: Weekly Security Scan
+
+on:
+  schedule:
+    # Run every Sunday at 2:00 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  security-scan:
+    name: Comprehensive Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      # Secret Detection
+      - name: Run Gitleaks (secret detection in code)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run TruffleHog (secret detection in git history)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+      # Dependency Scanning
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Run npm audit (JS vulnerabilities)
+        working-directory: website
+        run: |
+          echo "## NPM Audit Results" >> $GITHUB_STEP_SUMMARY
+          npm audit --json > npm-audit.json || true
+          npm audit 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pip-audit safety bandit
+          pip install -r lambda/requirements-test.txt
+
+      - name: Run pip-audit (Python vulnerabilities)
+        run: |
+          echo "## Pip Audit Results" >> $GITHUB_STEP_SUMMARY
+          pip-audit --format json > pip-audit.json || true
+          pip-audit 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+
+      - name: Run Safety check (Python vulnerabilities)
+        run: |
+          echo "## Safety Check Results" >> $GITHUB_STEP_SUMMARY
+          safety check --json > safety-report.json || true
+          safety check 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+
+      # Static Code Analysis
+      - name: Run Bandit (Python security linter)
+        run: |
+          echo "## Bandit Security Analysis" >> $GITHUB_STEP_SUMMARY
+          bandit -r lambda/ -f json -o bandit-report.json || true
+          bandit -r lambda/ 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+
+      # SAST for JavaScript/TypeScript
+      - name: Run ESLint security plugin
+        working-directory: website
+        run: |
+          npm install eslint-plugin-security --save-dev || true
+          echo "## ESLint Security Results" >> $GITHUB_STEP_SUMMARY
+          npx eslint --ext .ts,.tsx,.js app/ lib/ components/ --format json > eslint-security.json 2>/dev/null || true
+
+      # Upload all reports as artifacts
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            website/npm-audit.json
+            pip-audit.json
+            safety-report.json
+            bandit-report.json
+            website/eslint-security.json
+          retention-days: 90
+
+      # Create issue if vulnerabilities found
+      - name: Check for critical vulnerabilities
+        run: |
+          CRITICAL_FOUND=false
+
+          # Check npm audit for critical
+          if [ -f website/npm-audit.json ]; then
+            CRITICAL=$(cat website/npm-audit.json | jq '.metadata.vulnerabilities.critical // 0' 2>/dev/null || echo "0")
+            if [ "$CRITICAL" -gt 0 ]; then
+              echo "Found $CRITICAL critical npm vulnerabilities"
+              CRITICAL_FOUND=true
+            fi
+          fi
+
+          # Check pip-audit
+          if [ -f pip-audit.json ]; then
+            PIP_VULNS=$(cat pip-audit.json | jq 'length' 2>/dev/null || echo "0")
+            if [ "$PIP_VULNS" -gt 0 ]; then
+              echo "Found $PIP_VULNS Python vulnerabilities"
+            fi
+          fi
+
+          if [ "$CRITICAL_FOUND" = true ]; then
+            echo "::warning::Critical vulnerabilities detected! Review the security reports."
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scans performed:" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: Secret detection in code" >> $GITHUB_STEP_SUMMARY
+          echo "- TruffleHog: Secret detection in git history" >> $GITHUB_STEP_SUMMARY
+          echo "- npm audit: JavaScript dependency vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "- pip-audit: Python dependency vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "- Safety: Python security database check" >> $GITHUB_STEP_SUMMARY
+          echo "- Bandit: Python static security analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Review artifacts for detailed reports." >> $GITHUB_STEP_SUMMARY
