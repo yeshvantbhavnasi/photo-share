@@ -1,16 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import AlbumCard from '@/components/AlbumCard';
 import { AlbumItem } from '@/lib/types';
 import { apiClient } from '@/lib/api-client';
 
 export default function AlbumsPage() {
+  const router = useRouter();
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState('');
   const [newAlbumDescription, setNewAlbumDescription] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
 
   useEffect(() => {
     // Load albums from API
@@ -27,10 +31,23 @@ export default function AlbumsPage() {
     loadAlbums();
   }, []);
 
-  const createAlbum = () => {
-    // Albums are created via the upload script
-    alert('Albums are created using the upload script. Run: python scripts/upload.py /path/to/photos --album-name "Album Name"');
-    setShowCreateModal(false);
+  const createAlbum = async () => {
+    if (!newAlbumName.trim()) return;
+
+    setIsCreating(true);
+    setCreateError('');
+
+    try {
+      const album = await apiClient.albums.create(newAlbumName.trim());
+      setShowCreateModal(false);
+      setNewAlbumName('');
+      // Navigate to the new album
+      router.push(`/album/?id=${album.id}`);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'Failed to create album');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   return (
@@ -142,19 +159,28 @@ export default function AlbumsPage() {
               </div>
             </div>
 
+            {createError && (
+              <p className="text-red-500 text-sm mt-2">{createError}</p>
+            )}
+
             <div className="flex gap-3 mt-6">
               <button
-                onClick={() => setShowCreateModal(false)}
-                className="flex-1 py-2 px-4 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setCreateError('');
+                  setNewAlbumName('');
+                }}
+                disabled={isCreating}
+                className="flex-1 py-2 px-4 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={createAlbum}
-                disabled={!newAlbumName.trim()}
+                disabled={!newAlbumName.trim() || isCreating}
                 className="flex-1 py-2 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white rounded-lg transition-colors"
               >
-                Create
+                {isCreating ? 'Creating...' : 'Create'}
               </button>
             </div>
           </div>

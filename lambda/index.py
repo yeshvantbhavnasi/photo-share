@@ -727,9 +727,32 @@ def lambda_handler(event, context):
 
     try:
         # Route: GET /albums
-        if path == '/albums' or path == '/api/albums':
+        if (path == '/albums' or path == '/api/albums') and http_method == 'GET':
             albums = get_albums(user_id=user_id)
             return cors_response(200, {'albums': albums})
+
+        # Route: POST /albums - Create a new album
+        if (path == '/albums' or path == '/api/albums') and http_method == 'POST':
+            try:
+                import uuid
+                body = json.loads(event.get('body', '{}'))
+                album_name = body.get('name', 'Untitled Album')
+
+                # Generate a unique album ID
+                album_id = f"{uuid.uuid4().hex[:8]}-{uuid.uuid4().hex[:4]}"
+
+                # Create the album
+                create_album_if_not_exists(album_id, album_name, user_id=user_id)
+
+                return cors_response(201, {
+                    'id': album_id,
+                    'name': album_name,
+                    'photoCount': 0,
+                    'coverPhoto': None
+                })
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Failed to create album: {str(e)}'})
 
         # Route: GET /albums/{id}
         if path.startswith('/albums/') or path.startswith('/api/albums/'):

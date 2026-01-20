@@ -130,10 +130,22 @@ export const apiClient = {
       }
     },
 
-    create: async (name: string, description?: string): Promise<AlbumItem> => {
-      // For now, albums are created via the upload script
-      // This is a placeholder for future web-based album creation
-      throw new Error('Album creation via web is not yet implemented. Use the upload script.');
+    create: async (name: string): Promise<AlbumItem> => {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/albums`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create album');
+      }
+      const data = await response.json();
+      return toAlbumItem({
+        id: data.id,
+        name: data.name,
+        photoCount: 0,
+        createdAt: new Date().toISOString(),
+      });
     },
 
     update: async (id: string, updates: { name?: string }): Promise<{ albumId: string; updated: boolean; name?: string }> => {
