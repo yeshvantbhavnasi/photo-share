@@ -9,6 +9,7 @@ on:
     branches:
       - main
       - master
+  workflow_dispatch:  # Allow manual trigger
 
 env:
   AWS_REGION: us-east-1
