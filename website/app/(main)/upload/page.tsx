@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import UploadDropzone from '@/components/UploadDropzone';
 import { AlbumItem } from '@/lib/types';
+import { apiClient } from '@/lib/api-client';
 
 export default function UploadPage() {
   const router = useRouter();
@@ -12,43 +13,46 @@ export default function UploadPage() {
   const [newAlbumName, setNewAlbumName] = useState('');
   const [createNewAlbum, setCreateNewAlbum] = useState(false);
   const [uploadCount, setUploadCount] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const storedAlbums = localStorage.getItem('photo-share-albums');
-    if (storedAlbums) {
+    const loadAlbums = async () => {
       try {
-        const parsed = JSON.parse(storedAlbums);
-        setAlbums(parsed);
-        if (parsed.length > 0) {
-          setSelectedAlbum(parsed[0].id);
+        const data = await apiClient.albums.list();
+        setAlbums(data);
+        if (data.length > 0) {
+          setSelectedAlbum(data[0].id);
         } else {
           setCreateNewAlbum(true);
         }
-      } catch {
+      } catch (error) {
+        console.error('Failed to load albums:', error);
         setCreateNewAlbum(true);
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setCreateNewAlbum(true);
-    }
+    };
+    loadAlbums();
   }, []);
 
-  const handleCreateAndSelect = () => {
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleCreateAndSelect = async () => {
     if (!newAlbumName.trim()) return;
 
-    const newAlbum: AlbumItem = {
-      id: `album-${Date.now()}`,
-      name: newAlbumName.trim(),
-      photoCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    const updatedAlbums = [...albums, newAlbum];
-    setAlbums(updatedAlbums);
-    localStorage.setItem('photo-share-albums', JSON.stringify(updatedAlbums));
-
-    setSelectedAlbum(newAlbum.id);
-    setCreateNewAlbum(false);
-    setNewAlbumName('');
+    setIsCreating(true);
+    try {
+      const newAlbum = await apiClient.albums.create(newAlbumName.trim());
+      setAlbums([...albums, newAlbum]);
+      setSelectedAlbum(newAlbum.id);
+      setCreateNewAlbum(false);
+      setNewAlbumName('');
+    } catch (error) {
+      console.error('Failed to create album:', error);
+      alert('Failed to create album. Please try again.');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleUploadComplete = () => {
@@ -70,7 +74,9 @@ export default function UploadPage() {
           Choose Album
         </h2>
 
-        {!createNewAlbum ? (
+        {isLoading ? (
+          <div className="text-center py-4 text-slate-500">Loading albums...</div>
+        ) : !createNewAlbum ? (
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">
@@ -127,10 +133,10 @@ export default function UploadPage() {
               )}
               <button
                 onClick={handleCreateAndSelect}
-                disabled={!newAlbumName.trim()}
+                disabled={!newAlbumName.trim() || isCreating}
                 className="flex-1 py-2 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white rounded-lg transition-colors"
               >
-                Create Album
+                {isCreating ? 'Creating...' : 'Create Album'}
               </button>
             </div>
           </div>
