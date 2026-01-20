@@ -74,6 +74,7 @@ jobs:
       - name: Run Lambda unit tests
         working-directory: lambda
         env:
+          AWS_DEFAULT_REGION: us-east-1
           PHOTOS_TABLE: TestPhotosTable
           SHARE_LINKS_TABLE: TestShareLinks
           PHOTOS_BUCKET: test-photos-bucket

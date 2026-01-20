@@ -12,6 +12,8 @@ from decimal import Decimal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set environment variables before importing modules
+# AWS_DEFAULT_REGION must be set before boto3 initializes
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 os.environ['PHOTOS_TABLE'] = 'TestPhotosTable'
 os.environ['SHARE_LINKS_TABLE'] = 'TestShareLinks'
 os.environ['PHOTOS_BUCKET'] = 'test-photos-bucket'
