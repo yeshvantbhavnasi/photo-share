@@ -27,21 +27,55 @@ CLOUDFRONT_DOMAIN = os.environ.get('CLOUDFRONT_DOMAIN', 'd1nf5k4wr11svj.cloudfro
 
 
 def get_user_id_from_event(event):
-    """Extract Cognito user ID from API Gateway authorizer context.
+    """Extract Cognito user ID from JWT token or API Gateway authorizer context.
 
-    When API Gateway is configured with a Cognito authorizer, it decodes
-    the JWT token and passes the claims in the requestContext.
-    The 'sub' claim contains the unique Cognito user ID.
+    Tries multiple methods:
+    1. API Gateway JWT authorizer context (for HTTP APIs)
+    2. API Gateway Cognito authorizer context (for REST APIs)
+    3. Decode JWT token from Authorization header directly
     """
+    import base64
+
     try:
-        # API Gateway passes decoded token claims in requestContext
+        # Method 1: HTTP API JWT authorizer (requestContext.authorizer.jwt.claims)
+        jwt_claims = event.get('requestContext', {}).get('authorizer', {}).get('jwt', {}).get('claims', {})
+        if jwt_claims.get('sub'):
+            return jwt_claims['sub']
+
+        # Method 2: REST API Cognito authorizer (requestContext.authorizer.claims)
         claims = event.get('requestContext', {}).get('authorizer', {}).get('claims', {})
-        user_id = claims.get('sub')  # Cognito user ID (UUID)
-        if user_id:
-            return user_id
-    except Exception:
-        pass
-    return None  # Return None for unauthenticated requests
+        if claims.get('sub'):
+            return claims['sub']
+
+        # Method 3: Decode JWT token from Authorization header
+        auth_header = event.get('headers', {}).get('authorization') or \
+                      event.get('headers', {}).get('Authorization') or ''
+
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]  # Remove 'Bearer ' prefix
+        elif auth_header:
+            token = auth_header
+        else:
+            return None
+
+        # JWT format: header.payload.signature
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+
+        # Decode payload (middle part) - add padding if needed
+        payload = parts[1]
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += '=' * padding
+
+        decoded = base64.urlsafe_b64decode(payload)
+        token_data = json.loads(decoded)
+        return token_data.get('sub')
+
+    except Exception as e:
+        print(f"Error extracting user ID: {e}")
+        return None
 
 
 class DecimalEncoder(json.JSONEncoder):
