@@ -2,13 +2,21 @@
  * API Client for Family Photo Sharing
  *
  * Fetches data from the Lambda API backed by DynamoDB.
+ * Includes authentication via Cognito JWT tokens.
  */
 
-import { PhotoItem, AlbumItem, ShareLinkItem, EditOperation, EditParameters, EditResponse } from './types';
+import { PhotoItem, AlbumItem, ShareLinkItem, EditOperation, EditParameters, EditResponse, DuplicateResult } from './types';
 
 // API Gateway endpoint
 const API_ENDPOINT = 'https://yd3tspcwml.execute-api.us-east-1.amazonaws.com/prod';
 const CLOUDFRONT_URL = process.env.NEXT_PUBLIC_CLOUDFRONT_URL || 'https://d1nf5k4wr11svj.cloudfront.net';
+
+// Auth token getter - will be set by AuthProvider
+let getAuthToken: (() => Promise<string | null>) | null = null;
+
+export function setAuthTokenGetter(getter: () => Promise<string | null>) {
+  getAuthToken = getter;
+}
 
 // Response types from API
 interface AlbumResponse {
@@ -64,24 +72,50 @@ function toPhotoItem(photo: PhotoResponse): PhotoItem {
   };
 }
 
+// Authenticated fetch wrapper
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {}),
+  };
+
+  // Add auth token if available
+  if (getAuthToken) {
+    const token = await getAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+
+  return fetch(url, {
+    ...options,
+    headers,
+  });
+}
+
 // API Client
 export const apiClient = {
   albums: {
     list: async (): Promise<AlbumItem[]> => {
       try {
-        const response = await fetch(`${API_ENDPOINT}/albums`);
-        if (!response.ok) throw new Error('Failed to fetch albums');
+        const response = await fetchWithAuth(`${API_ENDPOINT}/albums`);
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error('Authentication required');
+          }
+          throw new Error('Failed to fetch albums');
+        }
         const data = await response.json();
         return (data.albums || []).map(toAlbumItem);
       } catch (error) {
         console.error('Error fetching albums:', error);
-        return [];
+        throw error;
       }
     },
 
     get: async (id: string): Promise<AlbumItem | null> => {
       try {
-        const response = await fetch(`${API_ENDPOINT}/album?id=${encodeURIComponent(id)}`);
+        const response = await fetchWithAuth(`${API_ENDPOINT}/album?id=${encodeURIComponent(id)}`);
         if (!response.ok) return null;
         const data: AlbumPhotosResponse = await response.json();
         return {
@@ -102,16 +136,23 @@ export const apiClient = {
       throw new Error('Album creation via web is not yet implemented. Use the upload script.');
     },
 
-    update: async (id: string, updates: Partial<AlbumItem>): Promise<void> => {
-      // Placeholder for future implementation
-      throw new Error('Album update via web is not yet implemented.');
+    update: async (id: string, updates: { name?: string }): Promise<{ albumId: string; updated: boolean; name?: string }> => {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/album`, {
+        method: 'PUT',
+        body: JSON.stringify({ albumId: id, ...updates }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to update album');
+      }
+      return response.json();
     },
   },
 
   photos: {
     list: async (albumId: string): Promise<PhotoItem[]> => {
       try {
-        const response = await fetch(`${API_ENDPOINT}/album?id=${encodeURIComponent(albumId)}`);
+        const response = await fetchWithAuth(`${API_ENDPOINT}/album?id=${encodeURIComponent(albumId)}`);
         if (!response.ok) throw new Error('Failed to fetch photos');
         const data: AlbumPhotosResponse = await response.json();
         return (data.photos || []).map(toPhotoItem);
@@ -131,9 +172,8 @@ export const apiClient = {
       operation: EditOperation,
       parameters: EditParameters = {}
     ): Promise<EditResponse> => {
-      const response = await fetch(`${API_ENDPOINT}/edit`, {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ photoId, operation, parameters }),
       });
       if (!response.ok) {
@@ -164,7 +204,7 @@ export const apiClient = {
     },
 
     hide: async (photoId: string): Promise<{ photoId: string; hidden: boolean }> => {
-      const response = await fetch(`${API_ENDPOINT}/photos/${encodeURIComponent(photoId)}`, {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/photos/${encodeURIComponent(photoId)}`, {
         method: 'DELETE',
       });
       if (!response.ok) {
@@ -183,6 +223,7 @@ export const apiClient = {
   share: {
     validate: async (token: string): Promise<{ album: AlbumItem; photos: PhotoItem[] } | null> => {
       try {
+        // Share validation does NOT require auth - uses regular fetch
         const response = await fetch(`${API_ENDPOINT}/share?token=${encodeURIComponent(token)}`);
         if (!response.ok) return null;
         const data: AlbumPhotosResponse = await response.json();
@@ -202,8 +243,24 @@ export const apiClient = {
     },
 
     create: async (albumId: string, expiresInDays?: number): Promise<ShareLinkItem> => {
-      // Share links are created via the upload script with --share flag
-      throw new Error('Share link creation via web is not yet implemented. Use the upload script with --share flag.');
+      const response = await fetchWithAuth(`${API_ENDPOINT}/share`, {
+        method: 'POST',
+        body: JSON.stringify({ albumId, expiresInDays }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create share link');
+      }
+      const data = await response.json();
+      return {
+        token: data.token,
+        albumId: data.albumId,
+        albumName: '',
+        url: data.shareUrl,
+        createdAt: '',
+        expiresAt: data.expiresAt,
+        accessCount: 0,
+      };
     },
 
     get: async (token: string): Promise<ShareLinkItem | null> => {
@@ -229,6 +286,75 @@ export const apiClient = {
     ): Promise<{ uploadUrl: string; photoKey: string; thumbnailKey: string }> => {
       // Placeholder for future web upload implementation
       throw new Error('Web upload is not yet implemented. Use the upload script.');
+    },
+  },
+
+  migrate: {
+    fromDefaultUser: async (): Promise<{ migratedCount: number; fromUser: string; toUser: string }> => {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/migrate`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Migration failed');
+      }
+      return response.json();
+    },
+  },
+
+  duplicates: {
+    findInAlbum: async (albumId: string): Promise<DuplicateResult> => {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/duplicates?albumId=${encodeURIComponent(albumId)}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Duplicate detection failed');
+      }
+      return response.json();
+    },
+
+    findAcrossAlbums: async (): Promise<DuplicateResult> => {
+      const response = await fetchWithAuth(`${API_ENDPOINT}/duplicates`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Duplicate detection failed');
+      }
+      return response.json();
+    },
+  },
+
+  timeline: {
+    get: async (options?: { startDate?: string; endDate?: string; limit?: number }): Promise<{
+      photos: PhotoItem[];
+      byDate: Record<string, PhotoItem[]>;
+      totalCount: number;
+      hasMore: boolean;
+    }> => {
+      try {
+        const params = new URLSearchParams();
+        if (options?.startDate) params.set('startDate', options.startDate);
+        if (options?.endDate) params.set('endDate', options.endDate);
+        if (options?.limit) params.set('limit', options.limit.toString());
+
+        const url = `${API_ENDPOINT}/timeline${params.toString() ? '?' + params.toString() : ''}`;
+        const response = await fetchWithAuth(url);
+        if (!response.ok) throw new Error('Failed to fetch timeline');
+        const data = await response.json();
+
+        return {
+          photos: (data.photos || []).map(toPhotoItem),
+          byDate: Object.fromEntries(
+            Object.entries(data.byDate || {}).map(([date, photos]) => [
+              date,
+              (photos as PhotoResponse[]).map(toPhotoItem),
+            ])
+          ),
+          totalCount: data.totalCount || 0,
+          hasMore: data.hasMore || false,
+        };
+      } catch (error) {
+        console.error('Error fetching timeline:', error);
+        throw error;
+      }
     },
   },
 };

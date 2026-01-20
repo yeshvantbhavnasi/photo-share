@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import Gallery from '@/components/Gallery';
 import AlbumCard from '@/components/AlbumCard';
+import MigrationPrompt from '@/components/MigrationPrompt';
 import { PhotoItem, AlbumItem } from '@/lib/types';
 import { apiClient } from '@/lib/api-client';
 
@@ -11,24 +12,40 @@ export default function HomePage() {
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
   const [recentPhotos, setRecentPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showMigration, setShowMigration] = useState(false);
+
+  const loadAlbums = useCallback(async () => {
+    try {
+      const data = await apiClient.albums.list();
+      setAlbums(data);
+      // Show migration prompt if user has no albums (they might have old data to claim)
+      if (data.length === 0) {
+        setShowMigration(true);
+      }
+    } catch (error) {
+      console.error('Failed to load albums:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    // Load albums from API
-    const loadAlbums = async () => {
-      try {
-        const data = await apiClient.albums.list();
-        setAlbums(data);
-      } catch (error) {
-        console.error('Failed to load albums:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
     loadAlbums();
-  }, []);
+  }, [loadAlbums]);
+
+  const handleMigrationComplete = () => {
+    setShowMigration(false);
+    setIsLoading(true);
+    loadAlbums();
+  };
 
   return (
     <div className="space-y-12">
+      {/* Migration Prompt */}
+      {showMigration && !isLoading && (
+        <MigrationPrompt onMigrationComplete={handleMigrationComplete} />
+      )}
+
       {/* Hero Section */}
       <section className="text-center py-12">
         <h1 className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">

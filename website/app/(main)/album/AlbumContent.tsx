@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Gallery from '@/components/Gallery';
@@ -15,6 +15,13 @@ export default function AlbumContent() {
   const [album, setAlbum] = useState<AlbumItem | null>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Rename functionality
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!albumId) {
@@ -32,6 +39,7 @@ export default function AlbumContent() {
 
         if (albumData) {
           setAlbum(albumData);
+          setEditName(albumData.name);
         }
         setPhotos(photosData);
       } catch (error) {
@@ -43,6 +51,53 @@ export default function AlbumContent() {
 
     loadAlbumData();
   }, [albumId]);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleStartEdit = () => {
+    if (album) {
+      setEditName(album.name);
+      setIsEditing(true);
+      setSaveError(null);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    if (album) {
+      setEditName(album.name);
+    }
+    setSaveError(null);
+  };
+
+  const handleSaveEdit = async (e?: FormEvent) => {
+    e?.preventDefault();
+
+    if (!album || !editName.trim()) return;
+    if (editName.trim() === album.name) {
+      setIsEditing(false);
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await apiClient.albums.update(album.id, { name: editName.trim() });
+      setAlbum({ ...album, name: editName.trim() });
+      setIsEditing(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Failed to rename album');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (!albumId) {
     return (
@@ -92,9 +147,64 @@ export default function AlbumContent() {
         <span className="text-slate-600 dark:text-slate-300">{album.name}</span>
       </nav>
 
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{album.name}</h1>
+          {/* Editable Album Name */}
+          {isEditing ? (
+            <form onSubmit={handleSaveEdit} className="flex items-center gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="text-3xl font-bold text-slate-900 dark:text-white bg-transparent border-b-2 border-primary-500 focus:outline-none focus:border-primary-600 px-1"
+                disabled={isSaving}
+              />
+              <button
+                type="submit"
+                disabled={isSaving || !editName.trim()}
+                className="p-2 text-green-600 hover:text-green-700 disabled:opacity-50"
+                title="Save"
+              >
+                {isSaving ? (
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-green-600 border-t-transparent"></div>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                disabled={isSaving}
+                className="p-2 text-slate-500 hover:text-slate-700 disabled:opacity-50"
+                title="Cancel"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2 group">
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{album.name}</h1>
+              <button
+                onClick={handleStartEdit}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Rename album"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {saveError && (
+            <p className="text-sm text-red-600 dark:text-red-400 mt-1">{saveError}</p>
+          )}
+
           {album.description && <p className="text-slate-600 dark:text-slate-300 mt-1">{album.description}</p>}
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">
             {photos.length} photo{photos.length !== 1 ? 's' : ''}

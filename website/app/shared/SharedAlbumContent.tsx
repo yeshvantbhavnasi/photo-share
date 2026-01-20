@@ -85,7 +85,7 @@ export default function SharedAlbumContent() {
       </div>
 
       {photos.length > 0 ? (
-        <Gallery photos={photos} readOnly />
+        <Gallery photos={photos} />
       ) : (
         <div className="text-center py-16 bg-slate-50 dark:bg-slate-800 rounded-xl">
           <svg className="w-16 h-16 mx-auto mb-4 text-slate-300 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">

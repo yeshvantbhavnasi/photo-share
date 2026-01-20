@@ -76,6 +76,9 @@ jobs:
         working-directory: website
         env:
           NEXT_PUBLIC_CLOUDFRONT_URL: https://d1nf5k4wr11svj.cloudfront.net
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_REGION: us-east-1
         run: npm run build
 
       - name: Configure AWS credentials
@@ -163,6 +166,7 @@ jobs:
           # Copy Lambda code
           cp index.py $PACKAGE_DIR/
           cp image_processor.py $PACKAGE_DIR/
+          cp duplicate_detector.py $PACKAGE_DIR/
 
           # Create deployment package
           cd $PACKAGE_DIR

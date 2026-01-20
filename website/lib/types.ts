@@ -63,3 +63,26 @@ export interface EditResponse extends PhotoItem {
   editOperation: string;
   originalPhotoId: string;
 }
+
+// Duplicate detection types
+export interface DuplicatePhoto extends PhotoItem {
+  albumId?: string;
+  albumName?: string;
+  similarity: number;
+  exactMatch: boolean;
+}
+
+export interface DuplicateGroup {
+  photos: DuplicatePhoto[];
+  count: number;
+  crossAlbum?: boolean;
+  albums?: string[];
+}
+
+export interface DuplicateResult {
+  duplicateGroups: DuplicateGroup[];
+  totalPhotos: number;
+  duplicatesFound: number;
+  groupsFound: number;
+  crossAlbumGroups?: number;
+}

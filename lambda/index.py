@@ -4,6 +4,15 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from decimal import Decimal
 
+# Import rate limiting and notification modules
+try:
+    import rate_limiter
+    import notification_handler
+    RATE_LIMITING_ENABLED = os.environ.get('RATE_LIMITING_ENABLED', 'true').lower() == 'true'
+except ImportError as e:
+    print(f"Warning: Rate limiting modules not available: {e}")
+    RATE_LIMITING_ENABLED = False
+
 # Initialize DynamoDB and S3
 dynamodb = boto3.resource('dynamodb')
 s3 = boto3.client('s3')
@@ -15,6 +24,24 @@ PHOTOS_BUCKET = os.environ.get('PHOTOS_BUCKET', 'yeshvant-photos-bucket-2024')
 
 # CloudFront domain for photo URLs
 CLOUDFRONT_DOMAIN = os.environ.get('CLOUDFRONT_DOMAIN', 'd1nf5k4wr11svj.cloudfront.net')
+
+
+def get_user_id_from_event(event):
+    """Extract Cognito user ID from API Gateway authorizer context.
+
+    When API Gateway is configured with a Cognito authorizer, it decodes
+    the JWT token and passes the claims in the requestContext.
+    The 'sub' claim contains the unique Cognito user ID.
+    """
+    try:
+        # API Gateway passes decoded token claims in requestContext
+        claims = event.get('requestContext', {}).get('authorizer', {}).get('claims', {})
+        user_id = claims.get('sub')  # Cognito user ID (UUID)
+        if user_id:
+            return user_id
+    except Exception:
+        pass
+    return None  # Return None for unauthenticated requests
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -31,8 +58,8 @@ def cors_response(status_code, body):
         'headers': {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
         },
         'body': json.dumps(body, cls=DecimalEncoder)
     }
@@ -376,6 +403,111 @@ def create_album_if_not_exists(album_id, album_name, user_id='default-user'):
     return False
 
 
+def migrate_user_data(from_user_id, to_user_id):
+    """Migrate all albums and photo data from one user to another.
+
+    This is used to transfer data from 'default-user' to an authenticated user.
+    """
+    from datetime import datetime
+
+    migrated_items = []
+
+    # Find all items belonging to the source user
+    response = photos_table.query(
+        KeyConditionExpression=Key('pk').eq(f'USER#{from_user_id}')
+    )
+
+    items_to_migrate = response.get('Items', [])
+
+    # Handle pagination
+    while 'LastEvaluatedKey' in response:
+        response = photos_table.query(
+            KeyConditionExpression=Key('pk').eq(f'USER#{from_user_id}'),
+            ExclusiveStartKey=response['LastEvaluatedKey']
+        )
+        items_to_migrate.extend(response.get('Items', []))
+
+    # Migrate each item
+    for item in items_to_migrate:
+        old_pk = item['pk']
+        old_sk = item['sk']
+
+        # Create new item with updated pk
+        new_item = dict(item)
+        new_item['pk'] = f'USER#{to_user_id}'
+        new_item['userId'] = to_user_id
+        new_item['migratedFrom'] = from_user_id
+        new_item['migratedAt'] = datetime.utcnow().isoformat() + 'Z'
+
+        # Write new item
+        photos_table.put_item(Item=new_item)
+
+        # Delete old item
+        photos_table.delete_item(Key={'pk': old_pk, 'sk': old_sk})
+
+        migrated_items.append({
+            'type': 'album' if old_sk.startswith('ALBUM#') else 'date_index',
+            'id': old_sk
+        })
+
+    return {
+        'migratedCount': len(migrated_items),
+        'fromUser': from_user_id,
+        'toUser': to_user_id,
+        'items': migrated_items
+    }
+
+
+def update_album(album_id, updates, user_id='default-user'):
+    """Update album metadata (e.g., name)"""
+    from datetime import datetime
+
+    # Check if album exists
+    response = photos_table.get_item(
+        Key={
+            'pk': f'USER#{user_id}',
+            'sk': f'ALBUM#{album_id}'
+        }
+    )
+
+    if 'Item' not in response:
+        raise ValueError(f'Album not found: {album_id}')
+
+    # Build update expression
+    update_expressions = []
+    expression_names = {}
+    expression_values = {}
+
+    if 'name' in updates:
+        update_expressions.append('#name = :name')
+        expression_names['#name'] = 'name'
+        expression_values[':name'] = updates['name']
+
+    if not update_expressions:
+        raise ValueError('No valid updates provided')
+
+    # Add updatedAt timestamp
+    update_expressions.append('updatedAt = :updatedAt')
+    expression_values[':updatedAt'] = datetime.utcnow().isoformat() + 'Z'
+
+    # Update the album
+    photos_table.update_item(
+        Key={
+            'pk': f'USER#{user_id}',
+            'sk': f'ALBUM#{album_id}'
+        },
+        UpdateExpression='SET ' + ', '.join(update_expressions),
+        ExpressionAttributeNames=expression_names if expression_names else None,
+        ExpressionAttributeValues=expression_values
+    )
+
+    return {
+        'albumId': album_id,
+        'updated': True,
+        **updates
+    }
+
+
 def generate_upload_urls(album_id, filename, content_type, user_id='default-user', is_thumbnail=False):
     """Generate presigned URLs for uploading a photo and optionally its thumbnail"""
     import uuid
@@ -486,26 +618,119 @@ def lambda_handler(event, context):
         path = path[4:]  # Remove '/dev' prefix
     query_params = event.get('queryStringParameters') or {}
 
+    # Get user ID from Cognito token (if authenticated)
+    user_id = get_user_id_from_event(event)
+
+    # Define protected routes that require authentication
+    # Note: /edit is NOT protected to allow shared album viewers to use AI features
+    protected_routes = ['/albums', '/album', '/timeline', '/photos', '/upload']
+    is_protected = any(path == route or path.startswith(route + '/') or path.startswith('/api' + route) for route in protected_routes)
+
+    # Check authentication for protected routes
+    if is_protected and not user_id:
+        return cors_response(401, {'error': 'Authentication required'})
+
+    # ============================================
+    # RATE LIMITING CHECK
+    # ============================================
+    if RATE_LIMITING_ENABLED:
+        try:
+            # Extract IP address and create identifier
+            ip_address = event.get('requestContext', {}).get('identity', {}).get('sourceIp') or \
+                        event.get('requestContext', {}).get('http', {}).get('sourceIp') or \
+                        'unknown'
+
+            # Prefer user ID if authenticated, otherwise use IP
+            identifier = f"USER#{user_id}" if user_id else f"IP#{ip_address}"
+
+            # Check rate limit
+            rate_check = rate_limiter.check_rate_limit(identifier, path)
+
+            if not rate_check['allowed']:
+                # Rate limit exceeded - detect abuse and send notifications
+                current_count = rate_check['current_count']
+                abuse_info = rate_limiter.detect_abuse(identifier, current_count, path)
+
+                # Record the abuse event
+                rate_limiter.record_abuse_event(identifier, abuse_info, path)
+
+                # Publish CloudWatch metrics
+                rate_limiter.publish_cloudwatch_metrics(identifier, abuse_info, path)
+
+                # Check if we should send notifications
+                notification_check = rate_limiter.should_send_notification(identifier, abuse_info['severity'])
+
+                if notification_check['should_send']:
+                    # Send notifications (email and SMS based on severity)
+                    notification_handler.send_notifications(abuse_info, identifier, path)
+                    print(f"Notifications sent for {identifier} on {path}")
+                else:
+                    print(f"Notification skipped for {identifier}: {notification_check['reason']}")
+
+                # Return 429 Too Many Requests
+                return cors_response(429, {
+                    'error': 'Too Many Requests',
+                    'message': f"Rate limit exceeded. Please try again in {int(rate_check['time_until_reset'])} seconds.",
+                    'retryAfter': int(rate_check['time_until_reset']),
+                    'limit': rate_check['limit'],
+                    'current': current_count
+                })
+
+            # Record the successful request
+            record_result = rate_limiter.record_request(identifier, path, {
+                'method': http_method,
+                'userAgent': event.get('requestContext', {}).get('identity', {}).get('userAgent', 'unknown')
+            })
+
+            print(f"Request recorded: {identifier} on {path} - Count: {record_result.get('count', 0)}")
+
+        except Exception as rate_limit_error:
+            # Log error but don't block request if rate limiting fails
+            print(f"Rate limiting error (allowing request): {rate_limit_error}")
+    # ============================================
+    # END RATE LIMITING CHECK
+    # ============================================
+
     try:
         # Route: GET /albums
         if path == '/albums' or path == '/api/albums':
-            albums = get_albums()
+            albums = get_albums(user_id=user_id)
             return cors_response(200, {'albums': albums})
 
         # Route: GET /albums/{id}
         if path.startswith('/albums/') or path.startswith('/api/albums/'):
             album_id = path.split('/')[-1]
             if album_id:
-                album_data = get_album_photos(album_id)
+                album_data = get_album_photos(album_id, user_id=user_id)
                 return cors_response(200, album_data)
 
         # Route: GET /album?id=xxx
-        if path == '/album' or path == '/api/album':
+        if (path == '/album' or path == '/api/album') and http_method == 'GET':
             album_id = query_params.get('id')
             if album_id:
-                album_data = get_album_photos(album_id)
+                album_data = get_album_photos(album_id, user_id=user_id)
                 return cors_response(200, album_data)
             return cors_response(400, {'error': 'Missing album id'})
+
+        # Route: PUT /album - Update album name
+        if (path == '/album' or path == '/api/album') and http_method == 'PUT':
+            try:
+                body = json.loads(event.get('body', '{}'))
+                album_id = body.get('albumId')
+                name = body.get('name')
+
+                if not album_id:
+                    return cors_response(400, {'error': 'Missing albumId'})
+                if not name:
+                    return cors_response(400, {'error': 'Missing name'})
+
+                result = update_album(album_id, {'name': name}, user_id=user_id)
+                return cors_response(200, result)
+
+            except ValueError as e:
+                return cors_response(404, {'error': str(e)})
+            except Exception as e:
+                return cors_response(500, {'error': f'Update failed: {str(e)}'})
 
         # Route: GET /timeline or /photos?startDate=X&endDate=Y
         if path == '/timeline' or path == '/photos' or path == '/api/timeline' or path == '/api/photos':
@@ -513,14 +738,17 @@ def lambda_handler(event, context):
             end_date = query_params.get('endDate')
             limit = int(query_params.get('limit', 100))
             timeline_data = get_photos_by_date(
+                user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
                 limit=min(limit, 500)  # Cap at 500
             )
             return cors_response(200, timeline_data)
 
-        # Route: POST /share - Create a new share link
+        # Route: POST /share - Create a new share link (requires auth)
         if (path == '/share' or path == '/api/share') and http_method == 'POST':
+            if not user_id:
+                return cors_response(401, {'error': 'Authentication required'})
             try:
                 body = json.loads(event.get('body', '{}'))
                 album_id = body.get('albumId')
@@ -529,7 +757,7 @@ def lambda_handler(event, context):
                 if not album_id:
                     return cors_response(400, {'error': 'Missing albumId'})
 
-                result = create_share_link(album_id, expires_in_days=expires_in_days)
+                result = create_share_link(album_id, user_id=user_id, expires_in_days=expires_in_days)
                 return cors_response(200, result)
 
             except Exception as e:
@@ -588,7 +816,7 @@ def lambda_handler(event, context):
                 if not photo_id or photo_id in ['photos', 'api']:
                     return cors_response(400, {'error': 'Missing photo ID'})
 
-                result = hide_photo(photo_id)
+                result = hide_photo(photo_id, user_id=user_id)
                 return cors_response(200, result)
 
             except ValueError as e:
@@ -605,7 +833,7 @@ def lambda_handler(event, context):
                 if not photo_id:
                     return cors_response(400, {'error': 'Missing photoId'})
 
-                result = hide_photo(photo_id)
+                result = hide_photo(photo_id, user_id=user_id)
                 return cors_response(200, result)
 
             except ValueError as e:
@@ -628,10 +856,10 @@ def lambda_handler(event, context):
                     return cors_response(400, {'error': 'Missing filename'})
 
                 # Create album if it doesn't exist
-                create_album_if_not_exists(album_id, album_name)
+                create_album_if_not_exists(album_id, album_name, user_id=user_id)
 
                 # Generate presigned upload URLs
-                result = generate_upload_urls(album_id, filename, content_type)
+                result = generate_upload_urls(album_id, filename, content_type, user_id=user_id)
                 return cors_response(200, result)
 
             except Exception as e:
@@ -653,12 +881,43 @@ def lambda_handler(event, context):
                     return cors_response(400, {'error': 'Missing required fields: albumId, photoId, photoKey'})
 
                 result = save_photo_metadata(
-                    album_id, photo_id, filename, photo_key, thumbnail_key, content_type, size
+                    album_id, photo_id, filename, photo_key, thumbnail_key, content_type, size, user_id=user_id
                 )
                 return cors_response(200, result)
 
             except Exception as e:
                 return cors_response(500, {'error': f'Save metadata failed: {str(e)}'})
+
+        # Route: POST /migrate - Migrate data from default-user to authenticated user
+        if (path == '/migrate' or path == '/api/migrate') and http_method == 'POST':
+            if not user_id:
+                return cors_response(401, {'error': 'Authentication required'})
+            try:
+                # Migrate from default-user to authenticated user
+                result = migrate_user_data('default-user', user_id)
+                return cors_response(200, result)
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Migration failed: {str(e)}'})
+
+        # Route: GET /duplicates - Find duplicate images
+        if (path == '/duplicates' or path == '/api/duplicates') and http_method == 'GET':
+            try:
+                from duplicate_detector import find_duplicates_in_album, find_duplicates_across_albums
+
+                album_id = query_params.get('albumId')
+
+                if album_id:
+                    # Find duplicates within a specific album
+                    result = find_duplicates_in_album(album_id, user_id=user_id)
+                else:
+                    # Find duplicates across all albums
+                    result = find_duplicates_across_albums(user_id=user_id)
+
+                return cors_response(200, result)
+
+            except Exception as e:
+                return cors_response(500, {'error': f'Duplicate detection failed: {str(e)}'})
 
         # Default: return 404
         return cors_response(404, {'error': 'Not found', 'path': path})

@@ -9,6 +9,18 @@ SHARE_LINKS_TABLE="ShareLinks"
 CLOUDFRONT_DOMAIN="d1nf5k4wr11svj.cloudfront.net"
 PHOTOS_BUCKET="yeshvant-photos-storage-2026"
 
+# Rate Limiting Configuration
+RATE_LIMIT_TABLE="RateLimitTracking"
+ABUSE_TABLE="AbuseDetection"
+ADMIN_EMAIL="bhavnasiyeshvant@gmail.com"
+ADMIN_PHONE="+19808337919"
+RATE_LIMIT_THRESHOLD="100"
+CRITICAL_THRESHOLD="200"
+RATE_LIMITING_ENABLED="true"
+
+# Get SNS Topic ARN (created by infrastructure setup)
+SNS_TOPIC_ARN=$(aws sns list-topics --region $REGION --query "Topics[?contains(TopicArn, 'app-security-alerts')].TopicArn" --output text 2>/dev/null || echo "")
+
 echo "Deploying Photo Share API Lambda..."
 
 # Create IAM role for Lambda if it doesn't exist
@@ -120,6 +132,56 @@ EOF
         --policy-name BedrockAccess \
         --policy-document file:///tmp/bedrock-policy.json
 
+    # Create Rate Limiting policy
+    cat > /tmp/rate-limiting-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:UpdateItem",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:$REGION:*:table/$RATE_LIMIT_TABLE",
+        "arn:aws:dynamodb:$REGION:*:table/$ABUSE_TABLE"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricData"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+
+    aws iam put-role-policy \
+        --role-name $ROLE_NAME \
+        --policy-name RateLimitingAccess \
+        --policy-document file:///tmp/rate-limiting-policy.json
+
     # Wait for role to propagate
     echo "Waiting for IAM role to propagate..."
     sleep 10
@@ -145,6 +207,9 @@ python3 -m pip install --platform manylinux2014_x86_64 --target $PACKAGE_DIR --i
 # Copy Lambda code
 cp index.py $PACKAGE_DIR/
 cp image_processor.py $PACKAGE_DIR/
+cp duplicate_detector.py $PACKAGE_DIR/
+cp rate_limiter.py $PACKAGE_DIR/
+cp notification_handler.py $PACKAGE_DIR/
 
 # Create deployment package
 cd $PACKAGE_DIR
@@ -164,7 +229,7 @@ if [ -z "$FUNCTION_EXISTS" ]; then
         --zip-file fileb:///tmp/lambda-function.zip \
         --timeout 120 \
         --memory-size 1024 \
-        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
+        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET,RATE_LIMIT_TABLE=$RATE_LIMIT_TABLE,ABUSE_TABLE=$ABUSE_TABLE,SNS_TOPIC_ARN=$SNS_TOPIC_ARN,ADMIN_EMAIL=$ADMIN_EMAIL,ADMIN_PHONE=$ADMIN_PHONE,RATE_LIMIT_THRESHOLD=$RATE_LIMIT_THRESHOLD,CRITICAL_THRESHOLD=$CRITICAL_THRESHOLD,RATE_LIMITING_ENABLED=$RATE_LIMITING_ENABLED}" \
         --region $REGION
 else
     echo "Updating Lambda function..."
@@ -180,7 +245,7 @@ else
         --function-name $FUNCTION_NAME \
         --timeout 120 \
         --memory-size 1024 \
-        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET}" \
+        --environment "Variables={PHOTOS_TABLE=$PHOTOS_TABLE,SHARE_LINKS_TABLE=$SHARE_LINKS_TABLE,CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN,PHOTOS_BUCKET=$PHOTOS_BUCKET,RATE_LIMIT_TABLE=$RATE_LIMIT_TABLE,ABUSE_TABLE=$ABUSE_TABLE,SNS_TOPIC_ARN=$SNS_TOPIC_ARN,ADMIN_EMAIL=$ADMIN_EMAIL,ADMIN_PHONE=$ADMIN_PHONE,RATE_LIMIT_THRESHOLD=$RATE_LIMIT_THRESHOLD,CRITICAL_THRESHOLD=$CRITICAL_THRESHOLD,RATE_LIMITING_ENABLED=$RATE_LIMITING_ENABLED}" \
         --region $REGION
 fi
 
