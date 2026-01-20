@@ -45,6 +45,11 @@ jobs:
 
       - name: Build
         working-directory: website
+        env:
+          NEXT_PUBLIC_CLOUDFRONT_URL: https://d1nf5k4wr11svj.cloudfront.net
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_REGION: us-east-1
         run: npm run build
 
   deploy:
